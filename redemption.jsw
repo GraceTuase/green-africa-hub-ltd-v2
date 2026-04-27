@@ -1,0 +1,238 @@
+// Backend: redemption.jsw
+import wixData from 'wix-data';
+import { calculateRecipeCarbon, updateMemberCarbonSaved } from './carbon';
+
+// All-in buffet redemption system
+export function redeemMeal(memberId, dailyMenuIngredients) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Check if already checked in this month
+            if (member.attendanceStatus === 'CheckedIn') {
+                throw new Error('Monthly buffet already redeemed. No carry-over permitted.');
+            }
+            
+            // Check if member has available credits
+            if (member.monthlyMealCredits <= 0) {
+                throw new Error('No monthly credits available');
+            }
+            
+            // Deduct FULL monthly allotment at once (not just 1)
+            const tierCredits = getTierCredits(member.tier);
+            const newCreditBalance = member.monthlyMealCredits - tierCredits;
+            
+            // Calculate carbon impact for the daily menu
+            return calculateRecipeCarbon(dailyMenuIngredients)
+                .then(carbonResult => {
+                    // Update member's lifetime carbon saved
+                    return updateMemberCarbonSaved(memberId, carbonResult.totalCarbon)
+                        .then(() => {
+                            // Update member profile
+                            return wixData.update('MembersProfile', member._id, {
+                                monthlyMealCredits: newCreditBalance,
+                                attendanceStatus: 'CheckedIn',
+                                checkInDate: new Date(),
+                                usageLogs: member.usageLogs + 1
+                            });
+                        })
+                        .then(() => {
+                            return {
+                                success: true,
+                                message: `Good news! Your monthly credits are activated for today's buffet. Enjoy your ${tierCredits} portions! (No carry-over permitted.)`,
+                                carbonImpact: carbonResult,
+                                remainingCredits: newCreditBalance,
+                                tier: member.tier
+                            };
+                        });
+                });
+        });
+}
+
+// Get tier credit amounts
+function getTierCredits(tier) {
+    const tierCredits = {
+        'basic': 3,
+        'pro': 5,
+        'proplus': 5,
+        'enterprise': 0 // Enterprise uses different system
+    };
+    
+    return tierCredits[tier] || 0;
+}
+
+// Check member redemption status
+export function checkRedemptionStatus(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                canRedeem: member.attendanceStatus === 'Available' && member.monthlyMealCredits > 0,
+                attendanceStatus: member.attendanceStatus,
+                monthlyCredits: member.monthlyMealCredits,
+                checkInDate: member.checkInDate,
+                tier: member.tier
+            };
+        });
+}
+
+// Monthly reset job - run on 1st of every month at 00:01
+export function resetMonthlyCredits() {
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth();
+    
+    // Reset all members to their tier defaults
+    return wixData.query('MembersProfile')
+        .find()
+        .then(results => {
+            const updatePromises = results.items.map(member => {
+                const tierCredits = getTierCredits(member.tier);
+                
+                return wixData.update('MembersProfile', member._id, {
+                    monthlyMealCredits: tierCredits,
+                    attendanceStatus: 'Available',
+                    checkInDate: null
+                });
+            });
+            
+            return Promise.all(updatePromises);
+        })
+        .then(() => {
+            console.log(`Monthly credits reset completed for ${currentYear}-${currentMonth + 1}`);
+            return { success: true, message: 'All monthly credits have been reset' };
+        })
+        .catch(error => {
+            console.error('Monthly reset failed:', error);
+            throw error;
+        });
+}
+
+// Get redemption statistics for admin dashboard
+export function getRedemptionStats() {
+    return wixData.query('MembersProfile')
+        .find()
+        .then(results => {
+            const stats = {
+                totalMembers: results.items.length,
+                checkedInToday: 0,
+                checkedInThisMonth: 0,
+                availableForRedemption: 0,
+                byTier: {
+                    basic: 0,
+                    pro: 0,
+                    proplus: 0,
+                    enterprise: 0
+                }
+            };
+            
+            const today = new Date();
+            const thisMonth = today.getMonth();
+            const thisYear = today.getFullYear();
+            
+            results.items.forEach(member => {
+                // Count by tier
+                stats.byTier[member.tier]++;
+                
+                // Check redemption status
+                if (member.attendanceStatus === 'CheckedIn') {
+                    stats.checkedInThisMonth++;
+                    
+                    // Check if checked in today
+                    if (member.checkInDate) {
+                        const checkInDate = new Date(member.checkInDate);
+                        if (checkInDate.toDateString() === today.toDateString()) {
+                            stats.checkedInToday++;
+                        }
+                    }
+                } else if (member.attendanceStatus === 'Available' && member.monthlyMealCredits > 0) {
+                    stats.availableForRedemption++;
+                }
+            });
+            
+            return stats;
+        });
+}
+
+// Enterprise staff management
+export function createStaffMember(parentId, staffEmail, staffName) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', parentId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Parent organization not found');
+            }
+            
+            const parent = results.items[0];
+            
+            if (parent.tier !== 'enterprise') {
+                throw new Error('Only Enterprise accounts can create staff members');
+            }
+            
+            // Create staff member with child ID
+            const staffId = generateStaffId(parentId);
+            
+            return wixData.insert('MembersProfile', {
+                uniqueMemberId: staffId,
+                tier: 'enterprise',
+                monthlyMealCredits: 5, // Staff get credits
+                lifetimeCarbonSaved: 0,
+                attendanceStatus: 'Available',
+                checkInDate: null,
+                usageLogs: 0,
+                parentId: parentId,
+                allergenSettings: JSON.stringify(getDefaultAllergenSettings()),
+                qrCodeUrl: generateQRCodeUrl(staffId),
+                createdAt: new Date(),
+                staffName: staffName,
+                staffEmail: staffEmail
+            });
+        });
+}
+
+// Generate staff ID for enterprise accounts
+function generateStaffId(parentId) {
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `${parentId}-STAFF-${random}`;
+}
+
+// Get default allergen settings
+function getDefaultAllergenSettings() {
+    return {
+        cereals: true,
+        crustaceans: true,
+        eggs: true,
+        fish: true,
+        peanuts: true,
+        soybeans: true,
+        milk: true,
+        nuts: true,
+        celery: true,
+        mustard: true,
+        sesame: true,
+        sulphites: true,
+        lupin: true,
+        molluscs: true
+    };
+}
+
+// Generate QR code URL
+function generateQRCodeUrl(memberId) {
+    return `https://greenafricahub.org.uk/allergen/${memberId}`;
+}

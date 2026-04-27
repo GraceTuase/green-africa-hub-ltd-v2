@@ -1,0 +1,268 @@
+// Backend: jobs.jsw - Monthly Reset Job Scheduler
+import wixData from 'wix-data';
+import { getTierCredits } from './events';
+
+// Monthly Credit Reset Job - Runs on 1st of each month at 00:01
+export function monthlyCreditReset() {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentDay = now.getDate();
+    
+    // Verify it's the right time (1st of month, 00:01)
+    if (currentDay !== 1 || currentHour !== 0 || currentMinute > 1) {
+        return {
+            success: false,
+            message: 'Not scheduled time for monthly reset',
+            nextReset: getNextResetDate(),
+            currentTime: now,
+            requirements: 'Must run on 1st of month at 00:01'
+        };
+    }
+    
+    console.log('Starting monthly credit reset for all Registry members...');
+    
+    // Get all members
+    return wixData.query('MembersProfile')
+        .find()
+        .then(results => {
+            const members = results.items;
+            console.log(`Processing ${members.length} members for monthly reset...`);
+            
+            // Process each member
+            const resetPromises = members.map(member => {
+                const tierCredits = getTierCredits(member.tier);
+                
+                // Reset member credits and status
+                return wixData.update('MembersProfile', member._id, {
+                    monthlyMealCredits: tierCredits,
+                    attendanceStatus: 'Available',
+                    checkInDate: null,
+                    lastResetDate: new Date(),
+                    monthlyCarbonSaved: 0,
+                    redemptionType: null,
+                    portionsActivated: 0,
+                    registryCompliance: true,
+                    trustScore: Math.min(member.trustScore + 1, 100) // Increment trust score for compliance
+                });
+            });
+            
+            return Promise.all(resetPromises);
+        })
+        .then(() => {
+            // Log the reset job
+            return wixData.insert('UsageLogs', {
+                memberId: 'SYSTEM',
+                action: 'MONTHLY_RESET_JOB',
+                timestamp: new Date(),
+                compliance: 'SYSTEM_MAINTENANCE',
+                registryTrust: true,
+                jobStatus: 'COMPLETED'
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Monthly credit reset completed successfully',
+                resetDate: new Date(),
+                membersProcessed: members.length,
+                nextReset: getNextResetDate(),
+                registryCompliance: true
+            };
+        })
+        .catch(error => {
+            console.error('Monthly reset failed:', error);
+            
+            // Log the failure
+            return wixData.insert('UsageLogs', {
+                memberId: 'SYSTEM',
+                action: 'MONTHLY_RESET_JOB',
+                timestamp: new Date(),
+                compliance: 'SYSTEM_ERROR',
+                registryTrust: false,
+                jobStatus: 'FAILED',
+                errorMessage: error.message
+            }).then(() => {
+                return {
+                    success: false,
+                    message: 'Monthly reset failed',
+                    error: error.message,
+                    resetDate: new Date(),
+                    nextReset: getNextResetDate()
+                };
+            });
+        });
+}
+
+// Get next reset date for dashboard display
+export function getNextResetDate() {
+    const now = new Date();
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 1, 0, 0);
+    return nextMonth;
+}
+
+// Get reset status and countdown
+export function getResetStatus() {
+    const now = new Date();
+    const nextReset = getNextResetDate();
+    const timeUntilReset = nextReset.getTime() - now.getTime();
+    
+    const daysUntilReset = Math.floor(timeUntilReset / (1000 * 60 * 60 * 24));
+    const hoursUntilReset = Math.floor((timeUntilReset % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutesUntilReset = Math.floor((timeUntilReset % (1000 * 60 * 60)) / (1000 * 60));
+    
+    return {
+        currentDate: now,
+        nextResetDate: nextReset,
+        daysUntilReset: daysUntilReset,
+        hoursUntilReset: hoursUntilReset,
+        minutesUntilReset: minutesUntilReset,
+        totalMinutesUntilReset: Math.floor(timeUntilReset / (1000 * 60)),
+        resetInProgress: now.getDate() === 1 && now.getHours() === 0 && now.getMinutes() <= 1
+    };
+}
+
+// Force monthly reset (admin only)
+export function forceMonthlyReset(adminMemberId, reason) {
+    console.log(`Force monthly reset initiated by admin: ${adminMemberId}, reason: ${reason}`);
+    
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', adminMemberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Admin member not found');
+            }
+            
+            const admin = results.items[0];
+            
+            // Verify admin has enterprise tier
+            if (admin.tier !== 'enterprise') {
+                throw new Error('Only Enterprise members can force monthly reset');
+            }
+            
+            // Proceed with forced reset
+            return monthlyCreditReset();
+        })
+        .then(result => {
+            // Log forced reset
+            return wixData.insert('UsageLogs', {
+                memberId: adminMemberId,
+                action: 'FORCE_MONTHLY_RESET',
+                timestamp: new Date(),
+                compliance: 'ADMIN_ACTION',
+                registryTrust: true,
+                reason: reason
+            }).then(() => {
+                return {
+                    ...result,
+                    forcedBy: adminMemberId,
+                    reason: reason,
+                    forcedAt: new Date()
+                };
+            });
+        });
+}
+
+// Get reset history for admin dashboard
+export function getResetHistory(limit = 12) {
+    return wixData.query('UsageLogs')
+        .eq('action', 'MONTHLY_RESET_JOB')
+        .or(wixData.query().eq('action', 'FORCE_MONTHLY_RESET'))
+        .descending('timestamp')
+        .limit(limit)
+        .find()
+        .then(results => {
+            return results.items.map(log => ({
+                date: log.timestamp,
+                status: log.jobStatus || 'COMPLETED',
+                type: log.action === 'FORCE_MONTHLY_RESET' ? 'FORCED' : 'SCHEDULED',
+                forcedBy: log.memberId === 'SYSTEM' ? null : log.memberId,
+                reason: log.reason || 'Scheduled monthly reset',
+                success: log.jobStatus === 'COMPLETED' || log.registryTrust === true
+            }));
+        });
+}
+
+// Validate reset schedule integrity
+export function validateResetSchedule() {
+    const now = new Date();
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 1, 0, 0);
+    
+    // Check if last reset was completed
+    return wixData.query('UsageLogs')
+        .eq('action', 'MONTHLY_RESET_JOB')
+        .ge('timestamp', lastMonth)
+        .find()
+        .then(results => {
+            const lastReset = results.items.find(log => log.jobStatus === 'COMPLETED');
+            
+            if (!lastReset) {
+                return {
+                    valid: false,
+                    message: 'No completed monthly reset found for last month',
+                    lastResetDate: null,
+                    recommendation: 'Run force monthly reset immediately'
+                };
+            }
+            
+            const daysSinceLastReset = Math.floor((now - lastReset.timestamp) / (1000 * 60 * 60 * 24));
+            
+            if (daysSinceLastReset > 35) {
+                return {
+                    valid: false,
+                    message: `Monthly reset is ${daysSinceLastReset - 30} days overdue`,
+                    lastResetDate: lastReset.timestamp,
+                    recommendation: 'Run force monthly reset immediately'
+                };
+            }
+            
+            return {
+                valid: true,
+                message: 'Monthly reset schedule is on track',
+                lastResetDate: lastReset.timestamp,
+                daysSinceLastReset: daysSinceLastReset,
+                nextReset: getNextResetDate()
+            };
+        });
+}
+
+// Get member reset history
+export function getMemberResetHistory(memberId, limit = 6) {
+    return wixData.query('UsageLogs')
+        .eq('memberId', memberId)
+        .eq('action', 'MONTHLY_RESET_JOB')
+        .descending('timestamp')
+        .limit(limit)
+        .find()
+        .then(results => {
+            return results.items.map(log => ({
+                resetDate: log.timestamp,
+                creditsReset: log.jobStatus === 'COMPLETED',
+                compliance: log.registryTrust
+            }));
+        });
+}
+
+// Automated health check for reset system
+export function healthCheck() {
+    const now = new Date();
+    
+    return Promise.all([
+        validateResetSchedule(),
+        getResetStatus(),
+        wixData.query('MembersProfile').count()
+    ]).then(([scheduleStatus, resetStatus, memberCount]) => {
+        return {
+            timestamp: now,
+            systemHealthy: scheduleStatus.valid,
+            totalMembers: memberCount.total,
+            nextReset: resetStatus.nextResetDate,
+            minutesUntilReset: resetStatus.totalMinutesUntilReset,
+            lastReset: scheduleStatus.lastResetDate,
+            scheduleStatus: scheduleStatus.message,
+            recommendations: scheduleStatus.valid ? [] : [scheduleStatus.recommendation]
+        };
+    });
+}

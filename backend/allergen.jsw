@@ -1,0 +1,349 @@
+// Backend: allergen.jsw - Dynamic Allergen Matrix & QR System
+import wixData from 'wix-data';
+import { checkBusinessSuiteAccess } from './security';
+
+// 14 Major Allergens Configuration
+const MAJOR_ALLERGENS = {
+    gluten: { name: 'Gluten', code: 'GL', priority: 1 },
+    dairy: { name: 'Dairy', code: 'DA', priority: 2 },
+    eggs: { name: 'Eggs', code: 'EG', priority: 3 },
+    soy: { name: 'Soy', code: 'SO', priority: 4 },
+    peanuts: { name: 'Peanuts', code: 'PN', priority: 5 },
+    treeNuts: { name: 'Tree Nuts', code: 'TN', priority: 6 },
+    shellfish: { name: 'Shellfish', code: 'SF', priority: 7 },
+    fish: { name: 'Fish', code: 'FS', priority: 8 },
+    sesame: { name: 'Sesame', code: 'SE', priority: 9 },
+    mustard: { name: 'Mustard', code: 'MU', priority: 10 },
+    celery: { name: 'Celery', code: 'CE', priority: 11 },
+    lupin: { name: 'Lupin', code: 'LU', priority: 12 },
+    molluscs: { name: 'Molluscs', code: 'MO', priority: 13 },
+    sulphites: { name: 'Sulphites', code: 'SU', priority: 14 }
+};
+
+// Get member allergen settings
+export function getAllergenSettings(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return getDefaultAllergenSettings();
+            }
+            
+            const member = results.items[0];
+            const settings = member.allergenSettings ? JSON.parse(member.allergenSettings) : getDefaultAllergenSettings();
+            
+            return {
+                memberId: memberId,
+                tier: member.tier,
+                settings: settings,
+                lastUpdated: member.allergenSettingsUpdated,
+                registryCompliance: true
+            };
+        });
+}
+
+// Update member allergen settings
+export function updateAllergenSettings(memberId, allergenData) {
+    return checkBusinessSuiteAccess(memberId)
+        .then(accessResult => {
+            if (!accessResult.allowed) {
+                throw new Error(accessResult.message);
+            }
+            
+            return wixData.query('MembersProfile')
+                .eq('uniqueMemberId', memberId)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            return wixData.update('MembersProfile', member._id, {
+                allergenSettings: JSON.stringify(allergenData),
+                allergenSettingsUpdated: new Date(),
+                allergenMatrixVersion: '2.0'
+            });
+        })
+        .then(() => {
+            // Log allergen settings update
+            return wixData.insert('UsageLogs', {
+                memberId: memberId,
+                action: 'ALLERGEN_SETTINGS_UPDATE',
+                allergenCount: Object.values(allergenData).filter(v => v).length,
+                timestamp: new Date(),
+                compliance: 'FOOD_SAFETY',
+                registryTrust: true
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                memberId: memberId,
+                message: 'Allergen settings updated successfully',
+                activeAllergens: Object.entries(allergenData).filter(([key, value]) => value).map(([key]) => key)
+            };
+        });
+}
+
+// Generate public allergen matrix URL/QR for business display
+export function generateAllergenMatrixUrl(memberId) {
+    return checkBusinessSuiteAccess(memberId)
+        .then(accessResult => {
+            if (!accessResult.allowed) {
+                throw new Error('Business Suite access required for allergen matrix generation');
+            }
+            
+            return getAllergenSettings(memberId);
+        })
+        .then(settings => {
+            // Generate unique URL for public allergen matrix
+            const baseUrl = 'https://www.greenafricahub.org/allergen-matrix';
+            const timestamp = Date.now();
+            const hash = generateSimpleHash(memberId + timestamp);
+            
+            const matrixUrl = `${baseUrl}?member=${memberId}&hash=${hash}&t=${timestamp}`;
+            
+            // Update member profile with allergen matrix URL
+            return wixData.query('MembersProfile')
+                .eq('uniqueMemberId', memberId)
+                .limit(1)
+                .find()
+                .then(results => {
+                    if (results.items.length > 0) {
+                        return wixData.update('MembersProfile', results.items[0]._id, {
+                            allergenMatrixUrl: matrixUrl,
+                            allergenMatrixGenerated: new Date()
+                        });
+                    }
+                })
+                .then(() => {
+                    return {
+                        success: true,
+                        matrixUrl: matrixUrl,
+                        qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(matrixUrl)}`,
+                        memberId: memberId,
+                        expires: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+                    };
+                });
+        });
+}
+
+// Get public allergen matrix (for customer display)
+export function getPublicAllergenMatrix(memberId, hash, timestamp) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Business not found');
+            }
+            
+            const member = results.items[0];
+            const settings = member.allergenSettings ? JSON.parse(member.allergenSettings) : getDefaultAllergenSettings();
+            
+            // Verify hash (simple security)
+            const expectedHash = generateSimpleHash(memberId + timestamp);
+            if (hash !== expectedHash) {
+                throw new Error('Invalid allergen matrix access');
+            }
+            
+            // Check if URL is expired (24 hours)
+            const urlAge = Date.now() - parseInt(timestamp);
+            if (urlAge > 24 * 60 * 60 * 1000) {
+                throw new Error('Allergen matrix URL expired');
+            }
+            
+            // Build allergen matrix for public display
+            const activeAllergens = Object.entries(settings)
+                .filter(([key, value]) => value)
+                .map(([key]) => ({
+                    name: MAJOR_ALLERGENS[key].name,
+                    code: MAJOR_ALLERGENS[key].code,
+                    priority: MAJOR_ALLERGENS[key].priority
+                }))
+                .sort((a, b) => a.priority - b.priority);
+            
+            return {
+                businessName: member.name || member.email,
+                memberId: memberId,
+                tier: member.tier,
+                activeAllergens: activeAllergens,
+                totalActiveAllergens: activeAllergens.length,
+                generatedAt: member.allergenMatrixGenerated,
+                registryCompliance: true,
+                lastUpdated: member.allergenSettingsUpdated,
+                foodSafetyNotice: 'This allergen matrix is part of the Green Africa Hub Registry of Trust. Information is updated in real-time.',
+                qrScanCount: member.qrScanCount || 0
+            };
+        });
+}
+
+// Create allergen lightbox data for Unit Settings popup
+export function createAllergenLightboxData(memberId) {
+    return getAllergenSettings(memberId)
+        .then(settings => {
+            const allergenOptions = Object.entries(MAJOR_ALLERGENS).map(([key, allergen]) => ({
+                key: key,
+                name: allergen.name,
+                code: allergen.code,
+                priority: allergen.priority,
+                isActive: settings.settings[key] || false,
+                description: getAllergenDescription(key)
+            }));
+            
+            return {
+                memberId: memberId,
+                tier: settings.tier,
+                allergenOptions: allergenOptions,
+                activeCount: allergenOptions.filter(a => a.isActive).length,
+                canEdit: settings.tier !== 'basic',
+                lastUpdated: settings.lastUpdated,
+                registryCompliance: true
+            };
+        });
+}
+
+// Get allergen description for UI
+function getAllergenDescription(allergenKey) {
+    const descriptions = {
+        gluten: 'Found in wheat, barley, rye, and products containing these grains',
+        dairy: 'Found in milk, cheese, yogurt, butter, and products containing milk',
+        eggs: 'Found in eggs and products containing eggs',
+        soy: 'Found in soybeans and products containing soy',
+        peanuts: 'Found in peanuts and peanut products',
+        treeNuts: 'Found in almonds, walnuts, cashews, and other tree nuts',
+        shellfish: 'Found in shrimp, crab, lobster, and other shellfish',
+        fish: 'Found in fish and fish products',
+        sesame: 'Found in sesame seeds and products containing sesame',
+        mustard: 'Found in mustard and products containing mustard',
+        celery: 'Found in celery, celeriac, and products containing celery',
+        lupin: 'Found in lupin and products containing lupin',
+        molluscs: 'Found in mussels, snails, squid, and other molluscs',
+        sulphites: 'Found in dried fruit, cured meats, soft drinks, and other products containing sulphites'
+    };
+    
+    return descriptions[allergenKey] || 'Allergen information not available';
+}
+
+// Default allergen settings for new members
+function getDefaultAllergenSettings() {
+    const settings = {};
+    Object.keys(MAJOR_ALLERGENS).forEach(key => {
+        settings[key] = false;
+    });
+    return settings;
+}
+
+// Generate simple hash for URL security
+function generateSimpleHash(input) {
+    let hash = 0;
+    for (let i = 0; i < input.length; i++) {
+        const char = input.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash).toString(16);
+}
+
+// Log QR code scan for analytics
+export function logQRCodeScan(memberId, scanData) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const currentScanCount = member.qrScanCount || 0;
+            
+            return wixData.update('MembersProfile', member._id, {
+                qrScanCount: currentScanCount + 1,
+                lastQRScan: new Date()
+            });
+        })
+        .then(() => {
+            return wixData.insert('UsageLogs', {
+                memberId: memberId,
+                action: 'QR_CODE_SCAN',
+                scanData: scanData,
+                timestamp: new Date(),
+                compliance: 'CUSTOMER_ENGAGEMENT',
+                registryTrust: true
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'QR code scan logged',
+                scanCount: currentScanCount + 1
+            };
+        });
+}
+
+// Get allergen compliance report
+export function getAllergenComplianceReport(memberId, dateRange) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const settings = member.allergenSettings ? JSON.parse(member.allergenSettings) : getDefaultAllergenSettings();
+            
+            // Get allergen-related usage logs
+            return wixData.query('UsageLogs')
+                .eq('memberId', memberId)
+                .between('timestamp', dateRange.start, dateRange.end)
+                .find()
+                .then(logResults => {
+                    const allergenLogs = logResults.items.filter(log => 
+                        log.action.includes('ALLERGEN') || 
+                        log.action.includes('QR_CODE_SCAN')
+                    );
+                    
+                    return {
+                        memberId: memberId,
+                        tier: member.tier,
+                        businessName: member.name || member.email,
+                        activeAllergens: Object.entries(settings).filter(([key, value]) => value).map(([key]) => MAJOR_ALLERGENS[key].name),
+                        totalActiveAllergens: Object.values(settings).filter(v => v).length,
+                        lastUpdated: member.allergenSettingsUpdated,
+                        matrixGenerated: member.allergenMatrixGenerated,
+                        qrScans: member.qrScanCount || 0,
+                        complianceLogs: allergenLogs.length,
+                        dateRange: dateRange,
+                        registryCompliance: true,
+                        foodSafetyRating: calculateFoodSafetyRating(settings, allergenLogs.length)
+                    };
+                });
+        });
+}
+
+// Calculate food safety rating
+function calculateFoodSafetyRating(settings, logCount) {
+    const activeAllergens = Object.values(settings).filter(v => v).length;
+    const complianceScore = Math.min(logCount, 20); // Cap at 20 for rating
+    const allergenScore = activeAllergens > 0 ? 10 : 0; // Bonus for having allergen info
+    
+    const totalScore = complianceScore + allergenScore;
+    
+    if (totalScore >= 25) return 'EXCELLENT';
+    if (totalScore >= 20) return 'GOOD';
+    if (totalScore >= 15) return 'SATISFACTORY';
+    if (totalScore >= 10) return 'NEEDS_IMPROVEMENT';
+    return 'POOR';
+}

@@ -1,0 +1,276 @@
+// Backend: referral.jsw - Referral System & Wallet Management
+import wixData from 'wix-data';
+import { generateMemberId } from './events';
+
+// Generate unique referral code for member
+export function generateReferralCode(memberId) {
+    const timestamp = Date.now().toString(36);
+    const hash = Math.random().toString(36).substr(2, 5);
+    return `GAH-${timestamp}-${hash}`.toUpperCase();
+}
+
+// Create referral entry for member
+export function createReferralEntry(memberId) {
+    const referralCode = generateReferralCode(memberId);
+    
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Update member with referral code
+            return wixData.update('MembersProfile', member._id, {
+                referralCode: referralCode,
+                totalReferrals: member.totalReferrals || 0,
+                totalReferralEarnings: member.totalReferralEarnings || 0,
+                walletBalance: member.walletBalance || 0
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                referralCode: referralCode,
+                referralLink: `https://www.greenafricahub.org/signup?ref=${referralCode}`,
+                message: 'Referral system activated'
+            };
+        });
+}
+
+// Process referral signup and credit wallet
+export function processReferralSignup(referralCode, referredEmail, purchaseType, purchaseAmount) {
+    // Find referral entry
+    return wixData.query('ReferralLedger')
+        .eq('referralCode', referralCode)
+        .eq('referredEmail', referredEmail)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length > 0) {
+                // Referral already exists
+                return { success: false, message: 'Referral already processed' };
+            }
+            
+            // Find referrer by referral code
+            return wixData.query('MembersProfile')
+                .eq('referralCode', referralCode)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            if (results.items.length === 0) {
+                return { success: false, message: 'Invalid referral code' };
+            }
+            
+            const referrer = results.items[0];
+            
+            // Calculate bonus based on purchase
+            let bonusAmount = 0;
+            if (purchaseType === 'membership') {
+                if (purchaseAmount >= 30) bonusAmount = 5; // £5 bonus for £30+ membership
+                if (purchaseAmount >= 50) bonusAmount = 10; // £10 bonus for £50+ membership
+                if (purchaseAmount >= 100) bonusAmount = 20; // £20 bonus for £100+ membership
+            } else if (purchaseType === 'event_ticket') {
+                bonusAmount = Math.floor(purchaseAmount * 0.1); // 10% of ticket price
+            }
+            
+            if (bonusAmount === 0) {
+                return { success: false, message: 'Purchase amount too low for referral bonus' };
+            }
+            
+            // Create referral ledger entry
+            return wixData.insert('ReferralLedger', {
+                referralId: `REF-${Date.now()}`,
+                referrerId: referrer.uniqueMemberId,
+                referredEmail: referredEmail,
+                referralCode: referralCode,
+                referralDate: new Date().toISOString(),
+                signupDate: new Date().toISOString(),
+                purchaseType: purchaseType,
+                purchaseAmount: purchaseAmount,
+                bonusAmount: bonusAmount,
+                status: 'completed',
+                walletCredited: false
+            });
+        })
+        .then(referralEntry => {
+            // Credit referrer's wallet
+            return creditReferrerWallet(referralEntry.referrerId, bonusAmount, referralEntry.referralId);
+        })
+        .then(result => {
+            return {
+                success: true,
+                message: 'Referral processed and wallet credited',
+                bonusAmount: result.bonusAmount,
+                newWalletBalance: result.newWalletBalance
+            };
+        })
+        .catch(error => {
+            console.error('Referral processing error:', error);
+            return { success: false, message: 'Failed to process referral' };
+        });
+}
+
+// Credit referrer's wallet
+function creditReferrerWallet(referrerId, bonusAmount, referralId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', referrerId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Referrer not found');
+            }
+            
+            const referrer = results.items[0];
+            const currentBalance = referrer.walletBalance || 0;
+            const currentReferrals = referrer.totalReferrals || 0;
+            const currentEarnings = referrer.totalReferralEarnings || 0;
+            
+            // Update referrer's wallet and stats
+            return wixData.update('MembersProfile', referrer._id, {
+                walletBalance: currentBalance + bonusAmount,
+                totalReferrals: currentReferrals + 1,
+                totalReferralEarnings: currentEarnings + bonusAmount
+            });
+        })
+        .then(() => {
+            // Mark referral as wallet credited
+            return wixData.update('ReferralLedger', referralId, {
+                walletCredited: true,
+                walletCreditDate: new Date().toISOString()
+            });
+        })
+        .then(() => {
+            return wixData.query('MembersProfile')
+                .eq('uniqueMemberId', referrerId)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            const updatedReferrer = results.items[0];
+            return {
+                success: true,
+                bonusAmount: bonusAmount,
+                newWalletBalance: updatedReferrer.walletBalance
+            };
+        });
+}
+
+// Get member's referral stats and wallet balance
+export function getReferralStats(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                memberId: memberId,
+                referralCode: member.referralCode,
+                referralLink: member.referralCode ? `https://www.greenafricahub.org/signup?ref=${member.referralCode}` : null,
+                walletBalance: member.walletBalance || 0,
+                totalReferrals: member.totalReferrals || 0,
+                totalReferralEarnings: member.totalReferralEarnings || 0
+            };
+        });
+}
+
+// Get referral history for member
+export function getReferralHistory(memberId) {
+    return wixData.query('ReferralLedger')
+        .eq('referrerId', memberId)
+        .descending('signupDate')
+        .find()
+        .then(results => {
+            return {
+                memberId: memberId,
+                referrals: results.items.map(referral => ({
+                    referralId: referral.referralId,
+                    referredEmail: referral.referredEmail,
+                    signupDate: referral.signupDate,
+                    purchaseType: referral.purchaseType,
+                    purchaseAmount: referral.purchaseAmount,
+                    bonusAmount: referral.bonusAmount,
+                    status: referral.status,
+                    walletCredited: referral.walletCredited
+                }))
+            };
+        });
+}
+
+// Use wallet balance for bulk shop purchase
+export function useWalletBalance(memberId, purchaseAmount) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const currentBalance = member.walletBalance || 0;
+            
+            if (currentBalance < purchaseAmount) {
+                return {
+                    success: false,
+                    message: 'Insufficient wallet balance',
+                    currentBalance: currentBalance,
+                    requiredAmount: purchaseAmount
+                };
+            }
+            
+            // Deduct from wallet
+            return wixData.update('MembersProfile', member._id, {
+                walletBalance: currentBalance - purchaseAmount
+            });
+        })
+        .then(() => {
+            return wixData.query('MembersProfile')
+                .eq('uniqueMemberId', memberId)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            const updatedMember = results.items[0];
+            return {
+                success: true,
+                message: 'Wallet balance used successfully',
+                amountDeducted: purchaseAmount,
+                newWalletBalance: updatedMember.walletBalance
+            };
+        });
+}
+
+// Validate referral code
+export function validateReferralCode(referralCode) {
+    return wixData.query('MembersProfile')
+        .eq('referralCode', referralCode)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { valid: false, message: 'Invalid referral code' };
+            }
+            
+            const referrer = results.items[0];
+            return {
+                valid: true,
+                referrerName: referrer.name || referrer.email,
+                referrerTier: referrer.tier,
+                message: 'Valid referral code'
+            };
+        });
+}

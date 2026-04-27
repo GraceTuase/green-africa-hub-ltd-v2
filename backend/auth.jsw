@@ -1,0 +1,429 @@
+// Backend: auth.jsw - Green Africa Hub Registry Authentication System
+import wixData from 'wix-data';
+import wixUsers from 'wix-users';
+import { onUserRegistered, generateMemberId, getTierCredits } from './events';
+import { checkTrustScore } from './security';
+
+// User registration with tier assignment
+export function registerUser(email, password, profile) {
+    return wixUsers.register(email, password, {
+        contactInfo: {
+            firstName: profile.name || '',
+            lastName: ''
+        }
+    })
+    .then(() => {
+        // Generate unique member ID
+        const uniqueMemberId = generateMemberId(profile.tier || 'basic');
+        
+        // Create member profile in CMS
+        return wixData.insert('MembersProfile', {
+            uniqueMemberId: uniqueMemberId,
+            tier: profile.tier || 'basic',
+            monthlyMealCredits: getTierCredits(profile.tier || 'basic'),
+            lifetimeCarbonSaved: 0,
+            attendanceStatus: 'Available',
+            checkInDate: null,
+            usageLogs: 0,
+            parentId: profile.parentId || null,
+            allergenSettings: JSON.stringify(getDefaultAllergenSettings()),
+            qrCodeUrl: generateQRCodeUrl(uniqueMemberId),
+            createdAt: new Date(),
+            email: email,
+            name: profile.name || '',
+            registryCompliance: true,
+            trustScore: 100,
+            verificationStatus: 'pending'
+        });
+    })
+    .then(result => {
+        console.log(`Registry Member Created: ${result.uniqueMemberId}`);
+        
+        // Log registration
+        return wixData.insert('UsageLogs', {
+            memberId: result.uniqueMemberId,
+            action: 'MEMBER_REGISTRATION',
+            timestamp: new Date(),
+            compliance: 'REGISTRY_COMPLIANCE',
+            registryTrust: true,
+            tier: result.tier
+        }).then(() => {
+            return {
+                success: true,
+                memberId: result.uniqueMemberId,
+                tier: result.tier,
+                message: 'Registration successful. Please check your email for verification.',
+                nextStep: 'VERIFY_EMAIL'
+            };
+        });
+    })
+    .catch(error => {
+        console.error('Registration failed:', error);
+        throw new Error(`Registration failed: ${error.message}`);
+    });
+}
+
+// User login with registry validation
+export function loginUser(email, password) {
+    return wixUsers.login(email, password)
+        .then(() => {
+            // Get user profile from CMS
+            return wixData.query('MembersProfile')
+                .eq('email', email)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member profile not found. Please complete registration.');
+            }
+            
+            const member = results.items[0];
+            
+            // Check registry compliance
+            if (!member.registryCompliance) {
+                throw new Error('Account suspended. Please contact support.');
+            }
+            
+            // Check trust score
+            return checkTrustScore(member.uniqueMemberId)
+                .then(trustResult => {
+                    if (!trustResult.trusted) {
+                        throw new Error('Account trust score too low. Please complete compliance activities.');
+                    }
+                    
+                    return {
+                        success: true,
+                        memberId: member.uniqueMemberId,
+                        tier: member.tier,
+                        name: member.name,
+                        email: member.email,
+                        trustScore: trustResult.trustScore,
+                        message: 'Login successful'
+                    };
+                });
+        })
+        .catch(error => {
+            console.error('Login failed:', error);
+            throw new Error(`Login failed: ${error.message}`);
+        });
+}
+
+// Email verification handler
+export function verifyEmail(token) {
+    return wixUsers.verifyEmail(token)
+        .then(() => {
+            // Update member verification status
+            return wixUsers.currentUser.getEmail()
+                .then(email => {
+                    return wixData.query('MembersProfile')
+                        .eq('email', email)
+                        .limit(1)
+                        .find();
+                })
+                .then(results => {
+                    if (results.items.length > 0) {
+                        return wixData.update('MembersProfile', results.items[0]._id, {
+                            verificationStatus: 'verified',
+                            verificationDate: new Date()
+                        });
+                    }
+                });
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Email verified successfully'
+            };
+        })
+        .catch(error => {
+            console.error('Email verification failed:', error);
+            throw new Error(`Email verification failed: ${error.message}`);
+        });
+}
+
+// Password reset request
+export function requestPasswordReset(email) {
+    return wixUsers.requestPasswordReset(email)
+        .then(() => {
+            // Log password reset request
+            return wixData.insert('UsageLogs', {
+                memberId: email,
+                action: 'PASSWORD_RESET_REQUEST',
+                timestamp: new Date(),
+                compliance: 'SECURITY',
+                registryTrust: true
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Password reset link sent to your email'
+            };
+        })
+        .catch(error => {
+            console.error('Password reset request failed:', error);
+            throw new Error(`Password reset failed: ${error.message}`);
+        });
+}
+
+// Get current user profile
+export function getCurrentUserProfile() {
+    return wixUsers.currentUser.getEmail()
+        .then(email => {
+            if (!email) {
+                throw new Error('User not logged in');
+            }
+            
+            return wixData.query('MembersProfile')
+                .eq('email', email)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member profile not found');
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                memberId: member.uniqueMemberId,
+                tier: member.tier,
+                name: member.name,
+                email: member.email,
+                credits: member.monthlyMealCredits,
+                carbonSaved: member.lifetimeCarbonSaved,
+                attendanceStatus: member.attendanceStatus,
+                trustScore: member.trustScore,
+                verificationStatus: member.verificationStatus,
+                registryCompliance: member.registryCompliance
+            };
+        });
+}
+
+// Update user profile
+export function updateUserProfile(updates) {
+    return wixUsers.currentUser.getEmail()
+        .then(email => {
+            return wixData.query('MembersProfile')
+                .eq('email', email)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member profile not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Validate updates
+            const validUpdates = {};
+            
+            if (updates.name) validUpdates.name = updates.name;
+            if (updates.allergenSettings) {
+                validUpdates.allergenSettings = JSON.stringify(updates.allergenSettings);
+                validUpdates.allergenSettingsUpdated = new Date();
+            }
+            
+            return wixData.update('MembersProfile', member._id, validUpdates);
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Profile updated successfully'
+            };
+        })
+        .catch(error => {
+            console.error('Profile update failed:', error);
+            throw new Error(`Profile update failed: ${error.message}`);
+        });
+}
+
+// Logout user
+export function logoutUser() {
+    return wixUsers.logout()
+        .then(() => {
+            return {
+                success: true,
+                message: 'Logged out successfully'
+            };
+        })
+        .catch(error => {
+            console.error('Logout failed:', error);
+            throw new Error(`Logout failed: ${error.message}`);
+        });
+}
+
+// Check if user is logged in
+export function isLoggedIn() {
+    return wixUsers.currentUser.loggedIn;
+}
+
+// Get authentication status
+export function getAuthStatus() {
+    return wixUsers.currentUser.getEmail()
+        .then(email => {
+            if (!email) {
+                return {
+                    loggedIn: false,
+                    message: 'Not logged in'
+                };
+            }
+            
+            return getCurrentUserProfile()
+                .then(profile => {
+                    return {
+                        loggedIn: true,
+                        profile: profile,
+                        message: 'User authenticated'
+                    };
+                });
+        })
+        .catch(error => {
+            return {
+                loggedIn: false,
+                message: error.message
+            };
+        });
+}
+
+// Enterprise multi-staff login
+export function loginStaffMember(parentId, staffEmail, staffPassword) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', parentId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Parent organization not found');
+            }
+            
+            const parent = results.items[0];
+            
+            if (parent.tier !== 'enterprise') {
+                throw new Error('Multi-staff login requires Enterprise membership');
+            }
+            
+            // Create or get staff member profile
+            return wixData.query('MembersProfile')
+                .eq('email', staffEmail)
+                .limit(1)
+                .find()
+                .then(staffResults => {
+                    if (staffResults.items.length === 0) {
+                        // Create new staff member
+                        const staffId = generateMemberId('enterprise', true, parentId);
+                        
+                        return wixData.insert('MembersProfile', {
+                            uniqueMemberId: staffId,
+                            tier: 'enterprise',
+                            monthlyMealCredits: 0,
+                            lifetimeCarbonSaved: 0,
+                            attendanceStatus: 'Available',
+                            checkInDate: null,
+                            usageLogs: 0,
+                            parentId: parentId,
+                            allergenSettings: JSON.stringify(getDefaultAllergenSettings()),
+                            qrCodeUrl: generateQRCodeUrl(staffId),
+                            createdAt: new Date(),
+                            email: staffEmail,
+                            name: staffEmail.split('@')[0],
+                            registryCompliance: true,
+                            trustScore: 100,
+                            verificationStatus: 'verified',
+                            isStaff: true
+                        });
+                    } else {
+                        return staffResults.items[0];
+                    }
+                });
+        })
+        .then(staffMember => {
+            // Log staff login
+            return wixData.insert('UsageLogs', {
+                memberId: staffMember.uniqueMemberId,
+                action: 'STAFF_LOGIN',
+                timestamp: new Date(),
+                compliance: 'SECURITY',
+                registryTrust: true,
+                parentId: parentId
+            }).then(() => {
+                return {
+                    success: true,
+                    memberId: staffMember.uniqueMemberId,
+                    parentId: parentId,
+                    tier: staffMember.tier,
+                    isStaff: true,
+                    message: 'Staff login successful'
+                };
+            });
+        })
+        .catch(error => {
+            console.error('Staff login failed:', error);
+            throw new Error(`Staff login failed: ${error.message}`);
+        });
+}
+
+// Helper functions
+function getDefaultAllergenSettings() {
+    return {
+        gluten: false,
+        dairy: false,
+        eggs: false,
+        soy: false,
+        peanuts: false,
+        treeNuts: false,
+        shellfish: false,
+        fish: false,
+        sesame: false,
+        mustard: false,
+        celery: false,
+        lupin: false,
+        molluscs: false,
+        sulphites: false
+    };
+}
+
+function generateQRCodeUrl(memberId) {
+    return `https://www.greenafricahub.org/registry/${memberId}`;
+}
+
+// Validate session
+export function validateSession(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { valid: false, reason: 'Member not found' };
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                valid: true,
+                memberId: memberId,
+                tier: member.tier,
+                trustScore: member.trustScore,
+                lastActivity: member.lastActivity || new Date()
+            };
+        });
+}
+
+// Update last activity
+export function updateLastActivity(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length > 0) {
+                return wixData.update('MembersProfile', results.items[0]._id, {
+                    lastActivity: new Date()
+                });
+            }
+        });
+}

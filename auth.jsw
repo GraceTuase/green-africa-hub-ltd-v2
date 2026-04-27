@@ -1,0 +1,354 @@
+// Backend: auth.jsw
+import wixUsers from 'wix-users';
+import wixData from 'wix-data';
+import { onUserRegistered, generateMemberId } from './events';
+
+// User registration with tier assignment
+export function registerUser(email, password, profile) {
+    return wixUsers.register(email, password, {
+        contactInfo: {
+            firstName: profile.name || '',
+            lastName: ''
+        }
+    }).then(() => {
+        // Generate unique member ID
+        const uniqueMemberId = generateMemberId(profile.tier || 'basic');
+        
+        // Create member profile in CMS
+        return wixData.insert('MembersProfile', {
+            uniqueMemberId: uniqueMemberId,
+            tier: profile.tier || 'basic',
+            monthlyMealCredits: getTierCredits(profile.tier || 'basic'),
+            lifetimeCarbonSaved: 0,
+            attendanceStatus: 'Available',
+            checkInDate: null,
+            usageLogs: 0,
+            parentId: profile.parentId || null,
+            allergenSettings: JSON.stringify(getDefaultAllergenSettings()),
+            qrCodeUrl: generateQRCodeUrl(uniqueMemberId),
+            createdAt: new Date(),
+            email: email,
+            name: profile.name || ''
+        });
+    })
+    .then(result => {
+        console.log(`Member registered: ${result.uniqueMemberId}`);
+        return {
+            success: true,
+            memberId: result.uniqueMemberId,
+            tier: result.tier,
+            message: 'Registration successful'
+        };
+    });
+}
+
+// User login
+export function loginUser(email, password) {
+    return wixUsers.login(email, password)
+        .then(() => {
+            // Get user profile from CMS
+            return wixData.query('MembersProfile')
+                .eq('email', email)
+                .limit(1)
+                .find();
+        })
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('User profile not found');
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                success: true,
+                memberId: member.uniqueMemberId,
+                tier: member.tier,
+                email: email,
+                name: member.name,
+                attendanceStatus: member.attendanceStatus,
+                monthlyCredits: member.monthlyMealCredits,
+                lifetimeCarbonSaved: member.lifetimeCarbonSaved
+            };
+        });
+}
+
+// Get user profile
+export function getUserProfile(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                memberId: member.uniqueMemberId,
+                email: member.email,
+                name: member.name,
+                tier: member.tier,
+                monthlyMealCredits: member.monthlyMealCredits,
+                lifetimeCarbonSaved: member.lifetimeCarbonSaved,
+                attendanceStatus: member.attendanceStatus,
+                checkInDate: member.checkInDate,
+                usageLogs: member.usageLogs,
+                parentId: member.parentId,
+                allergenSettings: member.allergenSettings ? JSON.parse(member.allergenSettings) : getDefaultAllergenSettings(),
+                qrCodeUrl: member.qrCodeUrl,
+                createdAt: member.createdAt
+            };
+        });
+}
+
+// Update user profile
+export function updateUserProfile(memberId, profileData) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Update allowed fields
+            const updateData = {};
+            
+            if (profileData.name) updateData.name = profileData.name;
+            if (profileData.allergenSettings) {
+                updateData.allergenSettings = JSON.stringify(profileData.allergenSettings);
+                updateData.qrCodeUrl = generateQRCodeUrl(memberId);
+            }
+            
+            return wixData.update('MembersProfile', member._id, updateData);
+        })
+        .then(result => {
+            return {
+                success: true,
+                message: 'Profile updated successfully',
+                profile: result
+            };
+        });
+}
+
+// Check if user is logged in
+export function isLoggedIn() {
+    return wixUsers.currentUser.loggedIn;
+}
+
+// Get current user
+export function getCurrentUser() {
+    return wixUsers.currentUser;
+}
+
+// Logout user
+export function logout() {
+    return wixUsers.logout();
+}
+
+// Get tier credits
+function getTierCredits(tier) {
+    const tierCredits = {
+        'basic': 3,
+        'pro': 5,
+        'proplus': 5,
+        'enterprise': 0
+    };
+    
+    return tierCredits[tier] || 3;
+}
+
+// Get default allergen settings
+function getDefaultAllergenSettings() {
+    return {
+        cereals: true,
+        crustaceans: true,
+        eggs: true,
+        fish: true,
+        peanuts: true,
+        soybeans: true,
+        milk: true,
+        nuts: true,
+        celery: true,
+        mustard: true,
+        sesame: true,
+        sulphites: true,
+        lupin: true,
+        molluscs: true
+    };
+}
+
+// Generate QR code URL
+function generateQRCodeUrl(memberId) {
+    return `https://greenafricahub.org.uk/allergen/${memberId}`;
+}
+
+// Verify member tier for feature access
+export function verifyMemberTier(memberId, requiredTier) {
+    return getUserProfile(memberId)
+        .then(profile => {
+            const tierHierarchy = {
+                'basic': 1,
+                'pro': 2,
+                'proplus': 3,
+                'enterprise': 4
+            };
+            
+            const memberLevel = tierHierarchy[profile.tier] || 0;
+            const requiredLevel = tierHierarchy[requiredTier] || 0;
+            
+            return {
+                hasAccess: memberLevel >= requiredLevel,
+                memberTier: profile.tier,
+                requiredTier: requiredTier
+            };
+        });
+}
+
+// Create staff member for enterprise accounts
+export function createStaffMember(parentId, staffData) {
+    return getUserProfile(parentId)
+        .then(parent => {
+            if (parent.tier !== 'enterprise') {
+                throw new Error('Only Enterprise accounts can create staff members');
+            }
+            
+            // Generate staff ID
+            const staffId = generateStaffId(parentId);
+            
+            // Create staff profile
+            return wixData.insert('MembersProfile', {
+                uniqueMemberId: staffId,
+                tier: 'enterprise',
+                monthlyMealCredits: 5,
+                lifetimeCarbonSaved: 0,
+                attendanceStatus: 'Available',
+                checkInDate: null,
+                usageLogs: 0,
+                parentId: parentId,
+                allergenSettings: JSON.stringify(getDefaultAllergenSettings()),
+                qrCodeUrl: generateQRCodeUrl(staffId),
+                createdAt: new Date(),
+                email: staffData.email,
+                name: staffData.name,
+                staffRole: staffData.role || 'staff'
+            });
+        })
+        .then(result => {
+            return {
+                success: true,
+                staffId: result.uniqueMemberId,
+                message: 'Staff member created successfully'
+            };
+        });
+}
+
+// Generate staff ID
+function generateStaffId(parentId) {
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `${parentId}-STAFF-${random}`;
+}
+
+// Get all staff members for enterprise account
+export function getStaffMembers(parentId) {
+    return wixData.query('MembersProfile')
+        .eq('parentId', parentId)
+        .find()
+        .then(results => {
+            return results.items.map(staff => ({
+                staffId: staff.uniqueMemberId,
+                name: staff.name,
+                email: staff.email,
+                role: staff.staffRole,
+                attendanceStatus: staff.attendanceStatus,
+                monthlyCredits: staff.monthlyMealCredits,
+                usageLogs: staff.usageLogs
+            }));
+        });
+}
+
+// Update member tier (for upgrades)
+export function updateMemberTier(memberId, newTier) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const newCredits = getTierCredits(newTier);
+            
+            return wixData.update('MembersProfile', member._id, {
+                tier: newTier,
+                monthlyMealCredits: newCredits
+            });
+        })
+        .then(result => {
+            return {
+                success: true,
+                newTier: newTier,
+                newCredits: getTierCredits(newTier),
+                message: 'Membership tier updated successfully'
+            };
+        });
+}
+
+// Get member statistics for admin dashboard
+export function getMemberStatistics() {
+    return wixData.query('MembersProfile')
+        .find()
+        .then(results => {
+            const stats = {
+                totalMembers: results.items.length,
+                byTier: {
+                    basic: 0,
+                    pro: 0,
+                    proplus: 0,
+                    enterprise: 0
+                },
+                checkedInToday: 0,
+                checkedInThisMonth: 0,
+                totalCarbonSaved: 0,
+                averageCarbonPerMember: 0
+            };
+            
+            const today = new Date();
+            const thisMonth = today.getMonth();
+            const thisYear = today.getFullYear();
+            
+            results.items.forEach(member => {
+                // Count by tier
+                stats.byTier[member.tier]++;
+                
+                // Count checked in today
+                if (member.checkInDate) {
+                    const checkInDate = new Date(member.checkInDate);
+                    if (checkInDate.toDateString() === today.toDateString()) {
+                        stats.checkedInToday++;
+                    }
+                    
+                    if (checkInDate.getMonth() === thisMonth && 
+                        checkInDate.getFullYear() === thisYear) {
+                        stats.checkedInThisMonth++;
+                    }
+                }
+                
+                // Sum carbon savings
+                stats.totalCarbonSaved += member.lifetimeCarbonSaved || 0;
+            });
+            
+            // Calculate average
+            stats.averageCarbonPerMember = results.items.length > 0 ? 
+                stats.totalCarbonSaved / results.items.length : 0;
+            
+            return stats;
+        });
+}

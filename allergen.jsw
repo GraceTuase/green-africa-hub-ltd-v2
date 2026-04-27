@@ -1,0 +1,363 @@
+// Backend: allergen.jsw
+import wixData from 'wix-data';
+
+// 14 major allergens definition
+const MAJOR_ALLERGENS = {
+    cereals: {
+        name: 'Cereals containing gluten',
+        description: 'Wheat, barley, rye, oats',
+        icon: '🌾'
+    },
+    crustaceans: {
+        name: 'Crustaceans',
+        description: 'Crab, lobster, prawns, shrimp',
+        icon: '🦐'
+    },
+    eggs: {
+        name: 'Eggs',
+        description: 'Chicken, duck, quail eggs',
+        icon: '🥚'
+    },
+    fish: {
+        name: 'Fish',
+        description: 'Cod, salmon, tuna, mackerel',
+        icon: '🐟'
+    },
+    peanuts: {
+        name: 'Peanuts',
+        description: 'Groundnuts, monkey nuts',
+        icon: '🥜'
+    },
+    soybeans: {
+        name: 'Soybeans',
+        description: 'Soya, tofu, edamame, soy milk',
+        icon: '🫘'
+    },
+    milk: {
+        name: 'Milk',
+        description: 'Cow\'s milk, cheese, butter, cream',
+        icon: '🥛'
+    },
+    nuts: {
+        name: 'Tree nuts',
+        description: 'Almonds, hazelnuts, walnuts, cashews',
+        icon: '🌰'
+    },
+    celery: {
+        name: 'Celery',
+        description: 'Celeriac, celery root',
+        icon: '🌿'
+    },
+    mustard: {
+        name: 'Mustard',
+        description: 'Mustard seeds, mustard powder',
+        icon: '🌾'
+    },
+    sesame: {
+        name: 'Sesame',
+        description: 'Sesame seeds, tahini, sesame oil',
+        icon: '🫘'
+    },
+    sulphites: {
+        name: 'Sulphites',
+        description: 'Preservatives, dried fruits, wine',
+        icon: '🍷'
+    },
+    lupin: {
+        name: 'Lupin',
+        description: 'Lupin flour, lupin beans',
+        icon: '🌱'
+    },
+    molluscs: {
+        name: 'Molluscs',
+        description: 'Mussels, oysters, snails, squid',
+        icon: '🐚'
+    }
+};
+
+// Update allergen settings for a member
+export function updateAllergenSettings(memberId, allergenSettings) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Verify member has access to allergen matrix
+            const allowedTiers = ['pro', 'proplus', 'enterprise'];
+            if (!allowedTiers.includes(member.tier)) {
+                throw new Error('Allergen matrix requires Pro membership or higher');
+            }
+            
+            // Validate allergen settings
+            const validatedSettings = validateAllergenSettings(allergenSettings);
+            
+            // Update member profile
+            return wixData.update('MembersProfile', member._id, {
+                allergenSettings: JSON.stringify(validatedSettings),
+                qrCodeUrl: generateQRCodeUrl(memberId, validatedSettings),
+                lastAllergenUpdate: new Date()
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Allergen settings updated successfully',
+                settings: allergenSettings
+            };
+        });
+}
+
+// Validate allergen settings
+function validateAllergenSettings(settings) {
+    const validated = {};
+    
+    Object.keys(MAJOR_ALLERGENS).forEach(allergen => {
+        validated[allergen] = settings[allergen] !== false;
+    });
+    
+    return validated;
+}
+
+// Get allergen settings for a member
+export function getAllergenSettings(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const settings = member.allergenSettings ? JSON.parse(member.allergenSettings) : getDefaultAllergenSettings();
+            
+            return {
+                memberId: memberId,
+                tier: member.tier,
+                settings: settings,
+                qrCodeUrl: member.qrCodeUrl,
+                lastUpdate: member.lastAllergenUpdate
+            };
+        });
+}
+
+// Generate QR code URL with allergen settings
+function generateQRCodeUrl(memberId, settings) {
+    const baseUrl = 'https://greenafricahub.org.uk/allergen';
+    const params = new URLSearchParams();
+    
+    // Add allergen settings to URL parameters
+    Object.keys(settings).forEach(allergen => {
+        params.append(allergen, settings[allergen] ? '1' : '0');
+    });
+    
+    params.append('member', memberId);
+    params.append('timestamp', Date.now());
+    
+    return `${baseUrl}?${params.toString()}`;
+}
+
+// Get allergen matrix for public display (via QR code)
+export function getPublicAllergenMatrix(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Business not found');
+            }
+            
+            const member = results.items[0];
+            const settings = member.allergenSettings ? JSON.parse(member.allergenSettings) : getDefaultAllergenSettings();
+            
+            // Build allergen matrix
+            const matrix = {
+                businessName: member.staffName || 'Green Africa Hub Member',
+                memberId: memberId,
+                tier: member.tier,
+                lastUpdated: member.lastAllergenUpdate || member.createdAt,
+                allergens: []
+            };
+            
+            // Add each allergen with status
+            Object.keys(MAJOR_ALLERGENS).forEach(allergen => {
+                matrix.allergens.push({
+                    key: allergen,
+                    name: MAJOR_ALLERGENS[allergen].name,
+                    description: MAJOR_ALLERGENS[allergen].description,
+                    icon: MAJOR_ALLERGENS[allergen].icon,
+                    present: settings[allergen] || false,
+                    status: settings[allergen] ? 'PRESENT' : 'NOT PRESENT'
+                });
+            });
+            
+            return matrix;
+        });
+}
+
+// Create allergen lightbox data
+export function createAllergenLightboxData(memberId) {
+    return getAllergenSettings(memberId)
+        .then(settings => {
+            return {
+                memberId: memberId,
+                title: 'Allergen Matrix Settings',
+                description: 'Toggle the 14 major allergens for your business',
+                allergens: Object.keys(MAJOR_ALLERGENS).map(allergen => ({
+                    key: allergen,
+                    name: MAJOR_ALLERGENS[allergen].name,
+                    description: MAJOR_ALLERGENS[allergen].description,
+                    icon: MAJOR_ALLERGENS[allergen].icon,
+                    enabled: settings.settings[allergen] || false
+                })),
+                qrCodeUrl: settings.qrCodeUrl,
+                lastUpdate: settings.lastUpdate
+            };
+        });
+}
+
+// Generate downloadable allergen matrix PDF
+export function generateAllergenPDF(memberId) {
+    return getPublicAllergenMatrix(memberId)
+        .then(matrix => {
+            // In a real implementation, this would generate a PDF
+            // For now, return the data structure that would be used
+            return {
+                pdfUrl: `/api/allergen-pdf/${memberId}`,
+                filename: `allergen-matrix-${memberId}.pdf`,
+                matrix: matrix,
+                generatedAt: new Date()
+            };
+        });
+}
+
+// Check allergen compliance for food safety
+export function checkAllergenCompliance(memberId, menuItems) {
+    return getAllergenSettings(memberId)
+        .then(settings => {
+            const compliance = {
+                compliant: true,
+                warnings: [],
+                allergenAnalysis: []
+            };
+            
+            menuItems.forEach(item => {
+                const itemAnalysis = {
+                    itemName: item.name,
+                    allergens: [],
+                    riskLevel: 'low'
+                };
+                
+                // Check each allergen
+                Object.keys(settings.settings).forEach(allergen => {
+                    if (settings.settings[allergen] && item.allergens && item.allergens.includes(allergen)) {
+                        itemAnalysis.allergens.push({
+                            name: MAJOR_ALLERGENS[allergen].name,
+                            icon: MAJOR_ALLERGENS[allergen].icon,
+                            risk: 'high'
+                        });
+                        
+                        if (itemAnalysis.riskLevel !== 'high') {
+                            itemAnalysis.riskLevel = 'medium';
+                        }
+                    }
+                });
+                
+                if (itemAnalysis.allergens.length > 0) {
+                    compliance.warnings.push(`${item.name} contains declared allergens`);
+                    if (itemAnalysis.riskLevel === 'high') {
+                        compliance.compliant = false;
+                    }
+                }
+                
+                compliance.allergenAnalysis.push(itemAnalysis);
+            });
+            
+            return compliance;
+        });
+}
+
+// Get allergen statistics for business dashboard
+export function getAllergenStats(memberId) {
+    return getAllergenSettings(memberId)
+        .then(settings => {
+            const stats = {
+                totalAllergens: 14,
+                declaredAllergens: 0,
+                allergenBreakdown: [],
+                lastUpdate: settings.lastUpdate
+            };
+            
+            Object.keys(settings.settings).forEach(allergen => {
+                const isDeclared = settings.settings[allergen];
+                if (isDeclared) {
+                    stats.declaredAllergens++;
+                }
+                
+                stats.allergenBreakdown.push({
+                    key: allergen,
+                    name: MAJOR_ALLERGENS[allergen].name,
+                    icon: MAJOR_ALLERGENS[allergen].icon,
+                    declared: isDeclared
+                });
+            });
+            
+            stats.compliancePercentage = Math.round((stats.declaredAllergens / stats.totalAllergens) * 100);
+            
+            return stats;
+        });
+}
+
+// Get default allergen settings
+function getDefaultAllergenSettings() {
+    const defaults = {};
+    Object.keys(MAJOR_ALLERGENS).forEach(allergen => {
+        defaults[allergen] = true; // Default to all allergens present for safety
+    });
+    return defaults;
+}
+
+// Validate allergen matrix for food safety compliance
+export function validateFoodSafetyCompliance(memberId) {
+    return getAllergenSettings(memberId)
+        .then(settings => {
+            const validation = {
+                compliant: true,
+                issues: [],
+                recommendations: []
+            };
+            
+            // Check if all 14 allergens are configured
+            const configuredAllergens = Object.keys(settings.settings).length;
+            if (configuredAllergens < 14) {
+                validation.compliant = false;
+                validation.issues.push('Not all 14 major allergens are configured');
+                validation.recommendations.push('Configure all 14 major allergens for full compliance');
+            }
+            
+            // Check if settings are recent (within last 30 days)
+            const lastUpdate = new Date(settings.lastUpdate);
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            
+            if (lastUpdate < thirtyDaysAgo) {
+                validation.issues.push('Allergen settings are outdated');
+                validation.recommendations.push('Update allergen settings monthly for freshness');
+            }
+            
+            // Check QR code generation
+            if (!settings.qrCodeUrl) {
+                validation.issues.push('QR code not generated');
+                validation.recommendations.push('Generate QR code for customer access');
+            }
+            
+            return validation;
+        });
+}

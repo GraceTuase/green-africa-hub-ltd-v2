@@ -1,0 +1,280 @@
+// Backend: sms.jsw - SMS API Integration for Carbon Badge Notifications
+import wixData from 'wix-data';
+import fetch from 'node-fetch';
+
+// SMS Configuration (replace with your SMS provider details)
+const SMS_CONFIG = {
+    apiKey: 'YOUR_SMS_API_KEY', // Replace with actual API key
+    apiUrl: 'https://api.sms-provider.com/send', // Replace with actual SMS API URL
+    senderId: 'GAHHub', // Your sender ID
+    carbonBadgeTemplate: '🌱 Green Africa Hub: Your Carbon Badge is ready! View your sustainability impact: {badgeUrl} - Track your green journey with GAH.'
+};
+
+// Send Carbon Badge SMS to Pro+ members
+export function sendCarbonBadgeSMS(memberId, carbonData) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Check if member is Pro+ tier (eligible for SMS notifications)
+            const eligibleTiers = ['pro', 'proplus', 'enterprise'];
+            if (!eligibleTiers.includes(member.tier)) {
+                return {
+                    success: false,
+                    message: 'SMS notifications available for Pro+ members only',
+                    tier: member.tier
+                };
+            }
+            
+            // Check if member has phone number
+            if (!member.phoneNumber) {
+                return {
+                    success: false,
+                    message: 'No phone number on file for SMS notifications'
+                };
+            }
+            
+            // Generate carbon badge URL
+            const badgeUrl = `https://www.greenafricahub.org/carbon-badge/${memberId}`;
+            
+            // Prepare SMS message
+            const message = SMS_CONFIG.carbonBadgeTemplate
+                .replace('{badgeUrl}', badgeUrl)
+                .replace('{carbonSaved}', carbonData.monthlyCarbonSaved.toFixed(2))
+                .replace('{memberName}', member.name || 'Member');
+            
+            // Send SMS via API
+            return sendSMS(member.phoneNumber, message);
+        })
+        .then(smsResult => {
+            if (smsResult.success) {
+                // Log SMS sent
+                return wixData.insert('UsageLogs', {
+                    logId: `SMS-${Date.now()}`,
+                    memberId: memberId,
+                    action: 'CARBON_BADGE_SMS_SENT',
+                    timestamp: new Date(),
+                    compliance: 'MEMBER_NOTIFICATION',
+                    registryTrust: true,
+                    smsStatus: 'sent',
+                    carbonData: JSON.stringify(carbonData)
+                });
+            }
+            return smsResult;
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Carbon Badge SMS sent successfully'
+            };
+        })
+        .catch(error => {
+            console.error('SMS sending error:', error);
+            return {
+                success: false,
+                message: 'Failed to send SMS notification'
+            };
+        });
+}
+
+// Send SMS via external API
+function sendSMS(phoneNumber, message) {
+    // In production, replace this with actual SMS API call
+    // For now, we'll simulate the SMS sending
+    
+    console.log(`SMS would be sent to ${phoneNumber}: ${message}`);
+    
+    // Actual SMS API call would look something like:
+    /*
+    return fetch(SMS_CONFIG.apiUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SMS_CONFIG.apiKey}`
+        },
+        body: JSON.stringify({
+            to: phoneNumber,
+            from: SMS_CONFIG.senderId,
+            message: message
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            return { success: true, messageId: data.messageId };
+        } else {
+            throw new Error(data.error || 'SMS sending failed');
+        }
+    });
+    */
+    
+    // Simulate successful SMS send
+    return Promise.resolve({
+        success: true,
+        messageId: `SMS-${Date.now()}`,
+        simulated: true
+    });
+}
+
+// Send SMS for sustainable batch logging (Pro+ feature)
+export function sendSustainableBatchSMS(memberId, batchData) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Check if member is Pro+ tier
+            const eligibleTiers = ['proplus', 'enterprise'];
+            if (!eligibleTiers.includes(member.tier)) {
+                return {
+                    success: false,
+                    message: 'Sustainable batch SMS available for Pro+ and Enterprise members only',
+                    tier: member.tier
+                };
+            }
+            
+            if (!member.phoneNumber) {
+                return {
+                    success: false,
+                    message: 'No phone number on file for SMS notifications'
+                };
+            }
+            
+            // Prepare sustainable batch message
+            const message = `🌿 Green Africa Hub: Great work! Your sustainable batch saved {carbonSaved}kg CO₂. View details: {batchUrl} - Leading the way in sustainable catering!`;
+            
+            const badgeUrl = `https://www.greenafricahub.org/sustainable-batch/${batchData.batchId}`;
+            const formattedMessage = message
+                .replace('{carbonSaved}', batchData.carbonSaved.toFixed(2))
+                .replace('{batchUrl}', badgeUrl);
+            
+            return sendSMS(member.phoneNumber, formattedMessage);
+        })
+        .then(smsResult => {
+            if (smsResult.success) {
+                // Log SMS sent
+                return wixData.insert('UsageLogs', {
+                    logId: `SMS-BATCH-${Date.now()}`,
+                    memberId: memberId,
+                    action: 'SUSTAINABLE_BATCH_SMS_SENT',
+                    timestamp: new Date(),
+                    compliance: 'SUSTAINABILITY_ALERT',
+                    registryTrust: true,
+                    smsStatus: 'sent',
+                    batchData: JSON.stringify(batchData)
+                });
+            }
+            return smsResult;
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Sustainable batch SMS sent successfully'
+            };
+        })
+        .catch(error => {
+            console.error('Batch SMS sending error:', error);
+            return {
+                success: false,
+                message: 'Failed to send sustainable batch SMS'
+            };
+        });
+}
+
+// Get SMS notification preferences for member
+export function getSMSNotificationSettings(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const eligibleTiers = ['pro', 'proplus', 'enterprise'];
+            const isEligible = eligibleTiers.includes(member.tier);
+            
+            return {
+                memberId: memberId,
+                tier: member.tier,
+                isEligibleForSMS: isEligible,
+                phoneNumber: member.phoneNumber || null,
+                smsEnabled: member.smsEnabled || false,
+                carbonBadgeNotifications: member.carbonBadgeNotifications !== false, // Default to true
+                sustainableBatchNotifications: member.sustainableBatchNotifications !== false // Default to true
+            };
+        });
+}
+
+// Update SMS notification preferences
+export function updateSMSNotificationSettings(memberId, settings) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Update SMS settings
+            return wixData.update('MembersProfile', member._id, {
+                phoneNumber: settings.phoneNumber || member.phoneNumber,
+                smsEnabled: settings.smsEnabled !== undefined ? settings.smsEnabled : member.smsEnabled,
+                carbonBadgeNotifications: settings.carbonBadgeNotifications !== undefined ? settings.carbonBadgeNotifications : member.carbonBadgeNotifications,
+                sustainableBatchNotifications: settings.sustainableBatchNotifications !== undefined ? settings.sustainableBatchNotifications : member.sustainableBatchNotifications
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'SMS notification settings updated successfully'
+            };
+        })
+        .catch(error => {
+            return {
+                success: false,
+                message: 'Failed to update SMS settings'
+            };
+        });
+}
+
+// Get SMS usage statistics for Enterprise
+export function getSMSUsageStats(parentId) {
+    return wixData.query('UsageLogs')
+        .contains('memberId', parentId) // Matches parent and all staff
+        .contains('action', 'SMS')
+        .between('timestamp', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), new Date()) // Last 30 days
+        .find()
+        .then(results => {
+            const carbonBadgeSMS = results.items.filter(log => log.action === 'CARBON_BADGE_SMS_SENT').length;
+            const batchSMS = results.items.filter(log => log.action === 'SUSTAINABLE_BATCH_SMS_SENT').length;
+            const totalSMS = results.items.length;
+            
+            return {
+                parentId: parentId,
+                period: 'Last 30 days',
+                totalSMS: totalSMS,
+                carbonBadgeSMS: carbonBadgeSMS,
+                sustainableBatchSMS: batchSMS,
+                averageSMSPerDay: (totalSMS / 30).toFixed(1)
+            };
+        });
+}

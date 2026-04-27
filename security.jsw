@@ -1,0 +1,304 @@
+// Backend: security.jsw
+import wixData from 'wix-data';
+import { verifyProfessionalAccess, checkDownloadCompliance } from './events';
+
+// Professional tool gating system
+export function checkToolAccess(memberId, toolName) {
+    return verifyProfessionalAccess(memberId, toolName)
+        .then(hasAccess => {
+            if (!hasAccess) {
+                throw new Error(`Access denied: ${toolName} requires higher membership tier`);
+            }
+            
+            return { hasAccess: true, toolName: toolName };
+        });
+}
+
+// Route protection middleware
+export function protectRoute(memberId, requiredTier, toolName) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const memberTier = member.tier;
+            
+            // Tier hierarchy: basic < pro < proplus < enterprise
+            const tierHierarchy = {
+                'basic': 1,
+                'pro': 2,
+                'proplus': 3,
+                'enterprise': 4
+            };
+            
+            const requiredLevel = tierHierarchy[requiredTier] || 0;
+            const memberLevel = tierHierarchy[memberTier] || 0;
+            
+            if (memberLevel < requiredLevel) {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: `This feature requires ${requiredTier} membership or higher`,
+                    currentTier: memberTier,
+                    requiredTier: requiredTier
+                };
+            }
+            
+            return {
+                allowed: true,
+                memberTier: memberTier,
+                toolName: toolName
+            };
+        });
+}
+
+// Cookbook gate - Block GAH-C users
+export function checkCookbookAccess(memberId) {
+    return protectRoute(memberId, 'pro', 'digital-cookbook')
+        .then(result => {
+            if (!result.allowed) {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: 'Digital Cookbook requires Pro membership or higher',
+                    upgradeUrl: '/membership-pricing'
+                };
+            }
+            
+            return {
+                allowed: true,
+                cookbookAccess: 'full'
+            };
+        });
+}
+
+// Business Suite access - GAH-B, GAH-S, GAH-E only
+export function checkBusinessSuiteAccess(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const allowedTiers = ['pro', 'proplus', 'enterprise'];
+            
+            if (!allowedTiers.includes(member.tier)) {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: 'Business Suite requires Pro membership or higher'
+                };
+            }
+            
+            return {
+                allowed: true,
+                tools: getAvailableTools(member.tier)
+            };
+        });
+}
+
+// Get available tools by tier
+function getAvailableTools(tier) {
+    const tools = {
+        'basic': ['impact-dashboard'],
+        'pro': ['impact-dashboard', 'digital-sms', 'allergen-matrix', 'digital-cookbook'],
+        'proplus': ['impact-dashboard', 'digital-sms', 'allergen-matrix', 'digital-cookbook', 'supplier-ledger', 'wholesale-audit'],
+        'enterprise': ['impact-dashboard', 'digital-sms', 'allergen-matrix', 'digital-cookbook', 'supplier-ledger', 'wholesale-audit', 'multi-staff', 'organization-analytics']
+    };
+    
+    return tools[tier] || [];
+}
+
+// Download permission check based on compliance
+export function checkDownloadPermission(memberId, documentType) {
+    return checkDownloadCompliance(memberId)
+        .then(canDownload => {
+            if (!canDownload) {
+                return {
+                    allowed: false,
+                    message: 'Download requires minimum 20 compliance entries for current month',
+                    requirement: 'Complete at least 20 compliance activities',
+                    currentStatus: 'Insufficient compliance logs'
+                };
+            }
+            
+            return {
+                allowed: true,
+                documentType: documentType,
+                downloadUrl: generateDownloadUrl(memberId, documentType)
+            };
+        });
+}
+
+// Generate secure download URL
+function generateDownloadUrl(memberId, documentType) {
+    const timestamp = Date.now();
+    const hash = generateSecureHash(memberId + documentType + timestamp);
+    return `/api/download/${memberId}/${documentType}/${hash}/${timestamp}`;
+}
+
+// Simple hash generation (in production, use proper crypto)
+function generateSecureHash(input) {
+    let hash = 0;
+    for (let i = 0; i < input.length; i++) {
+        const char = input.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32-bit integer
+    }
+    return hash.toString(16);
+}
+
+// Multi-staff access for Enterprise
+export function checkStaffAccess(parentId, staffId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', parentId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Parent organization not found');
+            }
+            
+            const parent = results.items[0];
+            
+            if (parent.tier !== 'enterprise') {
+                throw new Error('Only Enterprise accounts have staff access');
+            }
+            
+            // Verify staff member belongs to parent
+            return wixData.query('MembersProfile')
+                .eq('uniqueMemberId', staffId)
+                .eq('parentId', parentId)
+                .limit(1)
+                .find()
+                .then(staffResults => {
+                    if (staffResults.items.length === 0) {
+                        throw new Error('Staff member not found or not authorized');
+                    }
+                    
+                    return {
+                        allowed: true,
+                        parentId: parentId,
+                        staffId: staffId,
+                        staffName: staffResults.items[0].staffName,
+                        permissions: getStaffPermissions(staffResults.items[0])
+                    };
+                });
+        });
+}
+
+// Get staff permissions
+function getStaffPermissions(staffMember) {
+    const basePermissions = ['view-dashboard', 'view-reports'];
+    
+    if (staffMember.usageLogs > 50) {
+        basePermissions.push('download-reports');
+    }
+    
+    if (staffMember.usageLogs > 100) {
+        basePermissions.push('manage-settings');
+    }
+    
+    return basePermissions;
+}
+
+// API rate limiting for security
+export function checkRateLimit(memberId, action) {
+    const rateLimits = {
+        'download': 5, // 5 downloads per hour
+        'api-call': 100, // 100 API calls per hour
+        'login': 10 // 10 login attempts per hour
+    };
+    
+    const limit = rateLimits[action] || 100;
+    
+    // In production, implement proper rate limiting with Redis or similar
+    return wixData.query('RateLimits')
+        .eq('memberId', memberId)
+        .eq('action', action)
+        .gt('timestamp', new Date(Date.now() - 3600000)) // Last hour
+        .count()
+        .then(count => {
+            if (count >= limit) {
+                throw new Error(`Rate limit exceeded for ${action}. Maximum ${limit} per hour.`);
+            }
+            
+            // Log this action
+            return wixData.insert('RateLimits', {
+                memberId: memberId,
+                action: action,
+                timestamp: new Date()
+            });
+        })
+        .then(() => {
+            return { allowed: true, remaining: limit - count };
+        });
+}
+
+// Session management
+export function createSession(memberId) {
+    const sessionId = generateSessionId();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    
+    return wixData.insert('Sessions', {
+        sessionId: sessionId,
+        memberId: memberId,
+        createdAt: new Date(),
+        expiresAt: expiresAt,
+        isActive: true
+    }).then(() => {
+        return {
+            sessionId: sessionId,
+            expiresAt: expiresAt
+        };
+    });
+}
+
+// Generate session ID
+function generateSessionId() {
+    return 'sess_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+}
+
+// Validate session
+export function validateSession(sessionId) {
+    return wixData.query('Sessions')
+        .eq('sessionId', sessionId)
+        .eq('isActive', true)
+        .gt('expiresAt', new Date())
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Invalid or expired session');
+            }
+            
+            const session = results.items[0];
+            
+            return {
+                valid: true,
+                memberId: session.memberId,
+                expiresAt: session.expiresAt
+            };
+        });
+}
+
+// Audit logging for security
+export function logSecurityEvent(eventType, memberId, details) {
+    return wixData.insert('SecurityLogs', {
+        eventType: eventType,
+        memberId: memberId,
+        details: details,
+        timestamp: new Date(),
+        ipAddress: details.ipAddress || 'unknown',
+        userAgent: details.userAgent || 'unknown'
+    });
+}

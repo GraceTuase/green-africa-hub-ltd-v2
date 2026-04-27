@@ -1,0 +1,481 @@
+// Backend: database-setup.jsw - Database Collection Setup Scripts
+import wixData from 'wix-data';
+
+// Initialize all database collections for Green Africa Hub Registry of Trust
+export function initializeDatabaseCollections() {
+    console.log('Initializing Green Africa Hub Registry of Trust database collections...');
+    
+    const setupPromises = [
+        setupMembersProfileCollection(),
+        setupHeritageCookbookCollection(),
+        setupDailyMenuCollection(),
+        setupSupplierLedgerCollection(),
+        setupUsageLogsCollection()
+    ];
+    
+    return Promise.all(setupPromises)
+        .then(results => {
+            console.log('All database collections initialized successfully');
+            return {
+                success: true,
+                message: 'Registry of Trust database collections initialized',
+                collections: results.map(r => r.collection),
+                timestamp: new Date()
+            };
+        })
+        .catch(error => {
+            console.error('Database initialization failed:', error);
+            throw new Error(`Database setup failed: ${error.message}`);
+        });
+}
+
+// Setup MembersProfile Collection
+export function setupMembersProfileCollection() {
+    console.log('Setting up MembersProfile collection...');
+    
+    // Create sample member to verify collection structure
+    const sampleMember = {
+        uniqueMemberId: 'GAH-C-26-0001',
+        tier: 'basic',
+        monthlyMealCredits: 3,
+        lifetimeCarbonSaved: 0,
+        attendanceStatus: 'Available',
+        checkInDate: null,
+        usageLogs: 0,
+        parentId: null,
+        allergenSettings: JSON.stringify({
+            gluten: false,
+            dairy: false,
+            eggs: false,
+            soy: false,
+            peanuts: false,
+            treeNuts: false,
+            shellfish: false,
+            fish: false,
+            sesame: false,
+            mustard: false,
+            celery: false,
+            lupin: false,
+            molluscs: false,
+            sulphites: false
+        }),
+        qrCodeUrl: 'https://www.greenafricahub.org/registry/GAH-C-26-0001',
+        createdAt: new Date(),
+        email: 'sample@greenafricahub.org.uk',
+        name: 'Sample Member',
+        registryCompliance: true,
+        trustScore: 100,
+        verificationStatus: 'verified',
+        lastActivity: new Date()
+    };
+    
+    return wixData.insert('MembersProfile', sampleMember)
+        .then(result => {
+            console.log('MembersProfile collection setup complete');
+            return {
+                collection: 'MembersProfile',
+                status: 'created',
+                sampleId: result.uniqueMemberId
+            };
+        })
+        .catch(error => {
+            // If collection already exists, that's fine
+            if (error.message.includes('already exists')) {
+                console.log('MembersProfile collection already exists');
+                return {
+                    collection: 'MembersProfile',
+                    status: 'exists'
+                };
+            }
+            throw error;
+        });
+}
+
+// Setup HeritageCookbook Collection
+export function setupHeritageCookbookCollection() {
+    console.log('Setting up HeritageCookbook collection...');
+    
+    const sampleRecipes = [
+        {
+            recipeName: 'Jollof Rice',
+            airFreightBaseline: 8.5,
+            seaFreightTotal: 0.8,
+            inductionSavings: 0.6,
+            gasBaseline: 2.1,
+            allergenData: JSON.stringify({
+                gluten: false,
+                dairy: false,
+                eggs: false,
+                soy: false,
+                peanuts: false,
+                treeNuts: false,
+                shellfish: false,
+                fish: false,
+                sesame: false,
+                mustard: false,
+                celery: false,
+                lupin: false,
+                molluscs: false,
+                sulphites: false
+            }),
+            carbonFootprint: 0.8,
+            cookingTime: 30,
+            servings: 4,
+            difficulty: 'medium',
+            culturalOrigin: 'West African',
+            sustainabilityScore: 85,
+            createdAt: new Date()
+        },
+        {
+            recipeName: 'Efo Riro',
+            airFreightBaseline: 6.2,
+            seaFreightTotal: 0.6,
+            inductionSavings: 0.4,
+            gasBaseline: 1.8,
+            allergenData: JSON.stringify({
+                gluten: false,
+                dairy: false,
+                eggs: false,
+                soy: false,
+                peanuts: false,
+                treeNuts: false,
+                shellfish: false,
+                fish: false,
+                sesame: false,
+                mustard: false,
+                celery: true,
+                lupin: false,
+                molluscs: false,
+                sulphites: false
+            }),
+            carbonFootprint: 0.6,
+            cookingTime: 25,
+            servings: 4,
+            difficulty: 'medium',
+            culturalOrigin: 'Nigerian',
+            sustainabilityScore: 90,
+            createdAt: new Date()
+        },
+        {
+            recipeName: 'Pounded Yam',
+            airFreightBaseline: 4.5,
+            seaFreightTotal: 0.4,
+            inductionSavings: 0.3,
+            gasBaseline: 1.5,
+            allergenData: JSON.stringify({
+                gluten: false,
+                dairy: false,
+                eggs: false,
+                soy: false,
+                peanuts: false,
+                treeNuts: false,
+                shellfish: false,
+                fish: false,
+                sesame: false,
+                mustard: false,
+                celery: false,
+                lupin: false,
+                molluscs: false,
+                sulphites: false
+            }),
+            carbonFootprint: 0.4,
+            cookingTime: 20,
+            servings: 4,
+            difficulty: 'easy',
+            culturalOrigin: 'West African',
+            sustainabilityScore: 88,
+            createdAt: new Date()
+        }
+    ];
+    
+    const insertPromises = sampleRecipes.map(recipe => 
+        wixData.insert('HeritageCookbook', recipe)
+    );
+    
+    return Promise.all(insertPromises)
+        .then(results => {
+            console.log('HeritageCookbook collection setup complete');
+            return {
+                collection: 'HeritageCookbook',
+                status: 'created',
+                sampleCount: results.length
+            };
+        })
+        .catch(error => {
+            if (error.message.includes('already exists')) {
+                console.log('HeritageCookbook collection already exists');
+                return {
+                    collection: 'HeritageCookbook',
+                    status: 'exists'
+                };
+            }
+            throw error;
+        });
+}
+
+// Setup DailyMenu Collection
+export function setupDailyMenuCollection() {
+    console.log('Setting up DailyMenu collection...');
+    
+    const sampleDailyMenu = {
+        currentRecipes: JSON.stringify([
+            { recipeName: 'Jollof Rice', quantity: 2 },
+            { recipeName: 'Efo Riro', quantity: 1 },
+            { recipeName: 'Pounded Yam', quantity: 1 }
+        ]),
+        eventDate: new Date(),
+        totalCarbonBaseline: 19.2,
+        totalCarbonActual: 1.8,
+        totalCarbonSavings: 17.4,
+        percentageSavings: 90.6,
+        calculationMethod: 'TRIPLE_PILLAR',
+        registryCompliance: true,
+        createdAt: new Date()
+    };
+    
+    return wixData.insert('DailyMenu', sampleDailyMenu)
+        .then(result => {
+            console.log('DailyMenu collection setup complete');
+            return {
+                collection: 'DailyMenu',
+                status: 'created',
+                sampleId: result._id
+            };
+        })
+        .catch(error => {
+            if (error.message.includes('already exists')) {
+                console.log('DailyMenu collection already exists');
+                return {
+                    collection: 'DailyMenu',
+                    status: 'exists'
+                };
+            }
+            throw error;
+        });
+}
+
+// Setup SupplierLedger Collection
+export function setupSupplierLedgerCollection() {
+    console.log('Setting up SupplierLedger collection...');
+    
+    const sampleSuppliers = [
+        {
+            supplierId: 'SUP-001',
+            supplierName: 'African Foods Ltd',
+            batchId: 'BATCH-2026-001',
+            transportMode: 'sea_freight',
+            carbonImpact: 0.8,
+            origin: 'Ghana',
+            destination: 'UK',
+            productType: 'Rice',
+            quantity: 1000,
+            unit: 'kg',
+            certification: 'ORGANIC',
+            registryCompliance: true,
+            date: new Date(),
+            createdAt: new Date()
+        },
+        {
+            supplierId: 'SUP-002',
+            supplierName: 'Caribbean Spices Co',
+            batchId: 'BATCH-2026-002',
+            transportMode: 'sea_freight',
+            carbonImpact: 0.6,
+            origin: 'Jamaica',
+            destination: 'UK',
+            productType: 'Spices',
+            quantity: 500,
+            unit: 'kg',
+            certification: 'FAIR_TRADE',
+            registryCompliance: true,
+            date: new Date(),
+            createdAt: new Date()
+        }
+    ];
+    
+    const insertPromises = sampleSuppliers.map(supplier => 
+        wixData.insert('SupplierLedger', supplier)
+    );
+    
+    return Promise.all(insertPromises)
+        .then(results => {
+            console.log('SupplierLedger collection setup complete');
+            return {
+                collection: 'SupplierLedger',
+                status: 'created',
+                sampleCount: results.length
+            };
+        })
+        .catch(error => {
+            if (error.message.includes('already exists')) {
+                console.log('SupplierLedger collection already exists');
+                return {
+                    collection: 'SupplierLedger',
+                    status: 'exists'
+                };
+            }
+            throw error;
+        });
+}
+
+// Setup UsageLogs Collection
+export function setupUsageLogsCollection() {
+    console.log('Setting up UsageLogs collection...');
+    
+    const sampleLogs = [
+        {
+            logId: 'LOG-001',
+            memberId: 'GAH-C-26-0001',
+            action: 'MEMBER_REGISTRATION',
+            timestamp: new Date(),
+            compliance: 'REGISTRY_COMPLIANCE',
+            registryTrust: true,
+            tier: 'basic',
+            carbonAmount: 0
+        },
+        {
+            logId: 'LOG-002',
+            memberId: 'GAH-C-26-0001',
+            action: 'BUFFET_REDEMPTION',
+            timestamp: new Date(),
+            compliance: 'FOOD_SAFETY',
+            registryTrust: true,
+            carbonAmount: 17.4
+        },
+        {
+            logId: 'LOG-003',
+            memberId: 'GAH-C-26-0001',
+            action: 'CARBON_SAVINGS',
+            timestamp: new Date(),
+            compliance: 'TRIPLE_PILLAR',
+            registryTrust: true,
+            carbonAmount: 17.4
+        }
+    ];
+    
+    const insertPromises = sampleLogs.map(log => 
+        wixData.insert('UsageLogs', log)
+    );
+    
+    return Promise.all(insertPromises)
+        .then(results => {
+            console.log('UsageLogs collection setup complete');
+            return {
+                collection: 'UsageLogs',
+                status: 'created',
+                sampleCount: results.length
+            };
+        })
+        .catch(error => {
+            if (error.message.includes('already exists')) {
+                console.log('UsageLogs collection already exists');
+                return {
+                    collection: 'UsageLogs',
+                    status: 'exists'
+                };
+            }
+            throw error;
+        });
+}
+
+// Verify database collections exist and are accessible
+export function verifyDatabaseCollections() {
+    console.log('Verifying database collections...');
+    
+    const verificationPromises = [
+        wixData.query('MembersProfile').find(),
+        wixData.query('HeritageCookbook').find(),
+        wixData.query('DailyMenu').find(),
+        wixData.query('SupplierLedger').find(),
+        wixData.query('UsageLogs').find()
+    ];
+    
+    return Promise.all(verificationPromises)
+        .then(results => {
+            const verification = {
+                MembersProfile: { exists: true, count: results[0].totalCount },
+                HeritageCookbook: { exists: true, count: results[1].totalCount },
+                DailyMenu: { exists: true, count: results[2].totalCount },
+                SupplierLedger: { exists: true, count: results[3].totalCount },
+                UsageLogs: { exists: true, count: results[4].totalCount }
+            };
+            
+            console.log('Database verification complete:', verification);
+            
+            return {
+                success: true,
+                message: 'All database collections verified',
+                collections: verification,
+                timestamp: new Date()
+            };
+        })
+        .catch(error => {
+            console.error('Database verification failed:', error);
+            throw new Error(`Database verification failed: ${error.message}`);
+        });
+}
+
+// Clean up sample data (for production)
+export function cleanupSampleData() {
+    console.log('Cleaning up sample data...');
+    
+    const cleanupPromises = [
+        wixData.query('MembersProfile').eq('email', 'sample@greenafricahub.org.uk').remove(),
+        wixData.query('HeritageCookbook').remove(),
+        wixData.query('DailyMenu').remove(),
+        wixData.query('SupplierLedger').remove(),
+        wixData.query('UsageLogs').remove()
+    ];
+    
+    return Promise.all(cleanupPromises)
+        .then(results => {
+            console.log('Sample data cleanup complete');
+            return {
+                success: true,
+                message: 'Sample data cleaned up',
+                timestamp: new Date()
+            };
+        })
+        .catch(error => {
+            console.error('Sample data cleanup failed:', error);
+            throw new Error(`Sample data cleanup failed: ${error.message}`);
+        });
+}
+
+// Get database statistics
+export function getDatabaseStatistics() {
+    console.log('Getting database statistics...');
+    
+    const statsPromises = [
+        wixData.query('MembersProfile').find(),
+        wixData.query('HeritageCookbook').find(),
+        wixData.query('DailyMenu').find(),
+        wixData.query('SupplierLedger').find(),
+        wixData.query('UsageLogs').find()
+    ];
+    
+    return Promise.all(statsPromises)
+        .then(results => {
+            const stats = {
+                members: results[0].totalCount,
+                recipes: results[1].totalCount,
+                dailyMenus: results[2].totalCount,
+                suppliers: results[3].totalCount,
+                usageLogs: results[4].totalCount,
+                totalCarbonSaved: results[4].items
+                    .filter(log => log.action === 'CARBON_SAVINGS')
+                    .reduce((sum, log) => sum + (log.carbonAmount || 0), 0),
+                lastUpdated: new Date()
+            };
+            
+            return {
+                success: true,
+                statistics: stats,
+                message: 'Database statistics retrieved'
+            };
+        })
+        .catch(error => {
+            console.error('Database statistics failed:', error);
+            throw new Error(`Database statistics failed: ${error.message}`);
+        });
+}

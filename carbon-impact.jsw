@@ -1,0 +1,281 @@
+// Backend: carbon-impact.jsw
+import wixData from 'wix-data';
+
+// Triple-Pillar Tracing System
+// Savings = (Air-Freight Baseline + Gas Cooking) - (Supplier Sea-Freight + Induction Cooking)
+
+// Carbon emission factors for Triple-Pillar calculation
+const TRIPLE_PILLAR_FACTORS = {
+    // Transport factors (kg CO2e per kg)
+    airFreight: {
+        baseline: 8.5, // Air-freight baseline
+        seaFreight: 0.8 // Supplier sea-freight
+    },
+    // Cooking factors (kg CO2e per kg)
+    cooking: {
+        gas: 2.1, // Gas cooking
+        induction: 0.6 // Induction cooking
+    },
+    // Regional adjustments
+    regions: {
+        'uk': 1.0,
+        'europe': 0.9,
+        'africa': 0.8,
+        'asia': 1.1,
+        'americas': 1.2
+    }
+};
+
+// Calculate Triple-Pillar carbon savings for checked-in members
+export function calculateTriplePillarSavings(memberId, dailyMenu) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Only calculate for checked-in members
+            if (member.attendanceStatus !== 'CheckedIn') {
+                throw new Error('Member not checked in');
+            }
+            
+            // Calculate baseline emissions (Air-Freight + Gas Cooking)
+            const baselineEmissions = calculateBaselineEmissions(dailyMenu);
+            
+            // Calculate actual emissions (Sea-Freight + Induction Cooking)
+            const actualEmissions = calculateActualEmissions(dailyMenu);
+            
+            // Calculate savings
+            const savings = baselineEmissions - actualEmissions;
+            
+            // Update member's lifetime carbon saved
+            return updateMemberCarbonImpact(member._id, savings)
+                .then(() => {
+                    return {
+                        memberId: memberId,
+                        baselineEmissions: Math.round(baselineEmissions * 100) / 100,
+                        actualEmissions: Math.round(actualEmissions * 100) / 100,
+                        savings: Math.round(savings * 100) / 100,
+                        percentageReduction: Math.round((savings / baselineEmissions) * 100),
+                        date: new Date(),
+                        tier: member.tier
+                    };
+                });
+        });
+}
+
+// Calculate baseline emissions (worst case)
+function calculateBaselineEmissions(dailyMenu) {
+    let totalBaseline = 0;
+    
+    dailyMenu.ingredients.forEach(ingredient => {
+        const amount = ingredient.amount || 100; // Default 100g
+        const weight = amount / 1000; // Convert to kg
+        
+        // Air-freight transport
+        const transportEmission = weight * TRIPLE_PILLAR_FACTORS.airFreight.baseline;
+        
+        // Gas cooking
+        const cookingEmission = weight * TRIPLE_PILLAR_FACTORS.cooking.gas;
+        
+        totalBaseline += transportEmission + cookingEmission;
+    });
+    
+    return totalBaseline;
+}
+
+// Calculate actual emissions (best case)
+function calculateActualEmissions(dailyMenu) {
+    let totalActual = 0;
+    
+    dailyMenu.ingredients.forEach(ingredient => {
+        const amount = ingredient.amount || 100; // Default 100g
+        const weight = amount / 1000; // Convert to kg
+        
+        // Sea-freight transport
+        const transportEmission = weight * TRIPLE_PILLAR_FACTORS.airFreight.seaFreight;
+        
+        // Induction cooking
+        const cookingEmission = weight * TRIPLE_PILLAR_FACTORS.cooking.induction;
+        
+        totalActual += transportEmission + cookingEmission;
+    });
+    
+    return totalActual;
+}
+
+// Update member's carbon impact
+function updateMemberCarbonImpact(memberId, savings) {
+    return wixData.get('MembersProfile', memberId)
+        .then(member => {
+            const newLifetimeTotal = (member.lifetimeCarbonSaved || 0) + savings;
+            
+            return wixData.update('MembersProfile', memberId, {
+                lifetimeCarbonSaved: newLifetimeTotal
+            });
+        });
+}
+
+// Get carbon impact dashboard data
+export function getCarbonImpactDashboard(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                memberId: memberId,
+                tier: member.tier,
+                lifetimeCarbonSaved: member.lifetimeCarbonSaved || 0,
+                attendanceStatus: member.attendanceStatus,
+                checkInDate: member.checkInDate,
+                isActive: member.attendanceStatus === 'CheckedIn',
+                equivalentTo: getCarbonEquivalents(member.lifetimeCarbonSaved || 0),
+                monthlyImpact: calculateMonthlyImpact(member.checkInDate),
+                tierBenchmark: getTierBenchmark(member.tier)
+            };
+        });
+}
+
+// Get carbon equivalents for display
+function getCarbonEquivalents(carbonKg) {
+    return {
+        kmDriven: Math.round(carbonKg * 4.6), // Average car emits 0.22kg CO2/km
+        phoneCharges: Math.round(carbonKg * 1000), // 1 charge = 0.001kg CO2
+        treesNeeded: Math.round(carbonKg * 0.16), // 1 tree absorbs 6kg CO2/year
+        flights: Math.round(carbonKg * 0.0015), // 1 flight = 666kg CO2
+        homesPowered: Math.round(carbonKg * 0.1) // 1 home = 10kg CO2/day
+    };
+}
+
+// Calculate monthly impact
+function calculateMonthlyImpact(checkInDate) {
+    if (!checkInDate) return 0;
+    
+    const today = new Date();
+    const checkIn = new Date(checkInDate);
+    
+    // If checked in this month, return estimated monthly savings
+    if (checkIn.getMonth() === today.getMonth() && 
+        checkIn.getFullYear() === today.getFullYear()) {
+        return 2.5; // Average monthly saving per checked-in member
+    }
+    
+    return 0;
+}
+
+// Get tier benchmark for comparison
+function getTierBenchmark(tier) {
+    const benchmarks = {
+        'basic': 1.2, // kg CO2 per month
+        'pro': 2.5,
+        'proplus': 4.0,
+        'enterprise': 8.0
+    };
+    
+    return benchmarks[tier] || 1.0;
+}
+
+// Registry of Trust compliance tracking
+export function logRegistryCompliance(memberId, complianceType, data) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Increment usage logs for compliance tracking
+            const newUsageLogs = member.usageLogs + 1;
+            
+            // Create compliance log entry
+            const complianceEntry = {
+                memberId: memberId,
+                type: complianceType,
+                data: data,
+                timestamp: new Date(),
+                verified: true
+            };
+            
+            // Update member profile
+            return wixData.update('MembersProfile', member._id, {
+                usageLogs: newUsageLogs
+            }).then(() => {
+                return complianceEntry;
+            });
+        });
+}
+
+// Verify Registry of Trust compliance
+export function verifyRegistryCompliance(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const currentMonth = new Date().getMonth();
+            const currentYear = new Date().getFullYear();
+            
+            // Check if member meets minimum compliance requirements
+            const meetsMinimumUsage = member.usageLogs >= 20;
+            const isCheckedIn = member.attendanceStatus === 'CheckedIn';
+            const hasValidTier = ['pro', 'proplus', 'enterprise'].includes(member.tier);
+            
+            return {
+                compliant: meetsMinimumUsage && isCheckedIn && hasValidTier,
+                usageLogs: member.usageLogs,
+                minimumRequired: 20,
+                attendanceStatus: member.attendanceStatus,
+                tier: member.tier,
+                canDownload: meetsMinimumUsage
+            };
+        });
+}
+
+// Get organization-wide carbon impact (for Enterprise)
+export function getOrganizationCarbonImpact(parentId) {
+    return wixData.query('MembersProfile')
+        .eq('parentId', parentId)
+        .find()
+        .then(results => {
+            let totalSavings = 0;
+            let checkedInCount = 0;
+            let staffCount = results.items.length;
+            
+            results.items.forEach(staff => {
+                totalSavings += staff.lifetimeCarbonSaved || 0;
+                if (staff.attendanceStatus === 'CheckedIn') {
+                    checkedInCount++;
+                }
+            });
+            
+            return {
+                parentId: parentId,
+                staffCount: staffCount,
+                totalSavings: totalSavings,
+                checkedInCount: checkedInCount,
+                averageSavingsPerStaff: staffCount > 0 ? totalSavings / staffCount : 0,
+                equivalentTo: getCarbonEquivalents(totalSavings)
+            };
+        });
+}

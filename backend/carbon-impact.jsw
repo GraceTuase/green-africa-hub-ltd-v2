@@ -1,0 +1,283 @@
+// Backend: carbon-impact.jsw - Triple-Pillar Carbon Impact Engine
+import wixData from 'wix-data';
+
+// Triple-Pillar Tracing System Constants
+// Savings = (Air-Freight Baseline + Gas Cooking) - (Supplier Sea-Freight + Induction Cooking)
+
+const TRIPLE_PILLAR_FACTORS = {
+    // Transport factors (kg CO2e per kg)
+    airFreight: {
+        baseline: 8.5, // Air-freight baseline
+        seaFreight: 0.8 // Supplier sea-freight
+    },
+    // Cooking factors (kg CO2e per kg)
+    cooking: {
+        gas: 2.1, // Gas cooking baseline
+        induction: 0.6 // Induction cooking actual
+    },
+    // Regional adjustments
+    regions: {
+        'uk': 1.0,
+        'europe': 0.9,
+        'africa': 0.8,
+        'asia': 1.1,
+        'americas': 1.2
+    },
+    // DEFRA 2026 compliance factors
+    defra2024: {
+        gridIntensity: 0.124, // kg CO2/kWh UK grid 2024
+        gasFactor: 0.202 // kg CO2/kWh natural gas
+    }
+};
+
+// Calculate Triple-Pillar carbon savings for checked-in members
+export function calculateTriplePillarSavings(memberId, dailyMenu) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Registry Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Registry Compliance: Only calculate for checked-in members
+            if (member.attendanceStatus !== 'CheckedIn') {
+                throw new Error('Member not checked in - Registry compliance violation');
+            }
+            
+            // Calculate baseline emissions (Air-Freight + Gas Cooking)
+            const baselineEmissions = calculateBaselineEmissions(dailyMenu);
+            
+            // Calculate actual emissions (Sea-Freight + Induction Cooking)
+            const actualEmissions = calculateActualEmissions(dailyMenu);
+            
+            // Triple-Pillar Savings Calculation
+            const totalSavings = baselineEmissions - actualEmissions;
+            
+            // Calculate percentage savings
+            const percentageSavings = (totalSavings / baselineEmissions) * 100;
+            
+            // Regional adjustment
+            const regionMultiplier = TRIPLE_PILLAR_FACTORS.regions['uk']; // Default to UK
+            const adjustedSavings = totalSavings * regionMultiplier;
+            
+            return {
+                memberId: memberId,
+                tier: member.tier,
+                baselineEmissions: baselineEmissions,
+                actualEmissions: actualEmissions,
+                totalCarbon: adjustedSavings,
+                percentageSavings: percentageSavings,
+                calculationDate: new Date(),
+                registryCompliance: true,
+                triplePillarMethod: 'AirFreight+Gas - (SeaFreight+Induction)',
+                dailyMenu: dailyMenu,
+                regionMultiplier: regionMultiplier
+            };
+        });
+}
+
+// Calculate baseline emissions (Air-Freight + Gas Cooking)
+function calculateBaselineEmissions(dailyMenu) {
+    let totalBaseline = 0;
+    
+    dailyMenu.forEach(item => {
+        // Get recipe data from Heritage Cookbook collection
+        return wixData.query('HeritageCookbook')
+            .eq('recipeName', item.recipeName)
+            .limit(1)
+            .find()
+            .then(recipeResults => {
+                if (recipeResults.items.length > 0) {
+                    const recipe = recipeResults.items[0];
+                    
+                    // Air-freight baseline emissions
+                    const airFreightEmissions = recipe.airFreightBaseline * item.quantity;
+                    
+                    // Gas cooking emissions
+                    const gasCookingEmissions = (recipe.gasBaseline || TRIPLE_PILLAR_FACTORS.cooking.gas) * item.quantity;
+                    
+                    totalBaseline += airFreightEmissions + gasCookingEmissions;
+                }
+            });
+    }).then(() => {
+        return totalBaseline;
+    });
+}
+
+// Calculate actual emissions (Sea-Freight + Induction Cooking)
+function calculateActualEmissions(dailyMenu) {
+    let totalActual = 0;
+    
+    dailyMenu.forEach(item => {
+        // Get recipe data from Heritage Cookbook collection
+        return wixData.query('HeritageCookbook')
+            .eq('recipeName', item.recipeName)
+            .limit(1)
+            .find()
+            .then(recipeResults => {
+                if (recipeResults.items.length > 0) {
+                    const recipe = recipeResults.items[0];
+                    
+                    // Sea-freight actual emissions
+                    const seaFreightEmissions = recipe.seaFreightTotal * item.quantity;
+                    
+                    // Induction cooking emissions
+                    const inductionEmissions = (recipe.inductionSavings || TRIPLE_PILLAR_FACTORS.cooking.induction) * item.quantity;
+                    
+                    totalActual += seaFreightEmissions + inductionEmissions;
+                }
+            });
+    }).then(() => {
+        return totalActual;
+    });
+}
+
+// Update member's lifetime carbon saved
+export function updateMemberCarbonSaved(memberId, carbonSavings) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const newLifetimeTotal = member.lifetimeCarbonSaved + carbonSavings;
+            
+            return wixData.update('MembersProfile', member._id, {
+                lifetimeCarbonSaved: newLifetimeTotal,
+                lastCarbonCalculation: new Date(),
+                monthlyCarbonSaved: (member.monthlyCarbonSaved || 0) + carbonSavings
+            });
+        })
+        .then(() => {
+            // Log carbon savings to UsageLogs collection
+            return wixData.insert('UsageLogs', {
+                memberId: memberId,
+                action: 'CARBON_SAVINGS',
+                carbonAmount: carbonSavings,
+                timestamp: new Date(),
+                compliance: 'TRIPLE_PILLAR',
+                registryTrust: true
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                carbonSaved: carbonSavings,
+                newLifetimeTotal: newLifetimeTotal,
+                timestamp: new Date()
+            };
+        });
+}
+
+// Get carbon impact dashboard data
+export function getCarbonImpactDashboard(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Get monthly carbon savings
+            return wixData.query('UsageLogs')
+                .eq('memberId', memberId)
+                .eq('action', 'CARBON_SAVINGS')
+                .ge(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+                .find()
+                .then(monthlyLogs => {
+                    const monthlySavings = monthlyLogs.items.reduce((total, log) => total + log.carbonAmount, 0);
+                    
+                    return {
+                        memberId: memberId,
+                        tier: member.tier,
+                        lifetimeCarbonSaved: member.lifetimeCarbonSaved,
+                        monthlyCarbonSaved: monthlySavings,
+                        attendanceStatus: member.attendanceStatus,
+                        activeGreenBadge: member.attendanceStatus === 'CheckedIn',
+                        lastCarbonCalculation: member.lastCarbonCalculation,
+                        registryCompliance: true
+                    };
+                });
+        });
+}
+
+// Calculate daily menu carbon impact (for admin)
+export function calculateDailyMenuImpact(dailyMenu, eventDate) {
+    return Promise.all(dailyMenu.map(item => {
+        return wixData.query('HeritageCookbook')
+            .eq('recipeName', item.recipeName)
+            .limit(1)
+            .find()
+            .then(recipeResults => {
+                if (recipeResults.items.length === 0) {
+                    return null;
+                }
+                
+                const recipe = recipeResults.items[0];
+                
+                // Triple-Pillar calculation for this item
+                const baseline = (recipe.airFreightBaseline + (recipe.gasBaseline || TRIPLE_PILLAR_FACTORS.cooking.gas)) * item.quantity;
+                const actual = (recipe.seaFreightTotal + (recipe.inductionSavings || TRIPLE_PILLAR_FACTORS.cooking.induction)) * item.quantity;
+                const savings = baseline - actual;
+                
+                return {
+                    recipeName: item.recipeName,
+                    quantity: item.quantity,
+                    baselineEmissions: baseline,
+                    actualEmissions: actual,
+                    carbonSavings: savings,
+                    percentageSavings: (savings / baseline) * 100
+                };
+            });
+    })).then(results => {
+        const validResults = results.filter(r => r !== null);
+        
+        const totalBaseline = validResults.reduce((sum, r) => sum + r.baselineEmissions, 0);
+        const totalActual = validResults.reduce((sum, r) => sum + r.actualEmissions, 0);
+        const totalSavings = validResults.reduce((sum, r) => sum + r.carbonSavings, 0);
+        
+        return {
+            eventDate: eventDate,
+            dailyMenu: validResults,
+            totalBaselineEmissions: totalBaseline,
+            totalActualEmissions: totalActual,
+            totalCarbonSavings: totalSavings,
+            overallPercentageSavings: (totalSavings / totalBaseline) * 100,
+            calculationMethod: 'TRIPLE_PILLAR',
+            registryCompliance: true
+        };
+    });
+}
+
+// Get supplier carbon impact data
+export function getSupplierCarbonImpact(supplierId, dateRange) {
+    return wixData.query('SupplierLedger')
+        .eq('supplierId', supplierId)
+        .between('date', dateRange.start, dateRange.end)
+        .find()
+        .then(results => {
+            const totalImpact = results.items.reduce((sum, ledger) => {
+                return sum + (ledger.carbonImpact || 0);
+            }, 0);
+            
+            return {
+                supplierId: supplierId,
+                dateRange: dateRange,
+                totalCarbonImpact: totalImpact,
+                transactionCount: results.items.length,
+                registryCompliance: true
+            };
+        });
+}

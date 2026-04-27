@@ -1,0 +1,358 @@
+// Backend: security.jsw - Professional Tool Gating System
+import wixData from 'wix-data';
+import { checkFeatureAccess } from './events';
+
+// Cookbook Gate - Block GAH-C (Basic) users from /digital-cookbook
+export function checkCookbookAccess(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { 
+                    allowed: false, 
+                    redirectUrl: '/signup', 
+                    message: 'Member not found' 
+                };
+            }
+            
+            const member = results.items[0];
+            const memberTier = member.tier;
+            
+            // STRICT GATE: Basic users blocked from cookbook
+            if (memberTier === 'basic') {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: 'Digital Cookbook requires Pro membership or higher. Upgrade to access 50+ sustainable recipes.',
+                    currentTier: memberTier,
+                    requiredTier: 'pro',
+                    blockedFeature: 'digital_cookbook'
+                };
+            }
+            
+            // Allow access for Pro, Pro Plus, Enterprise
+            return {
+                allowed: true,
+                memberId: memberId,
+                tier: memberTier,
+                message: 'Digital Cookbook access granted'
+            };
+        });
+}
+
+// Business Suite Gate - Only GAH-B, GAH-S, GAH-E can access business tools
+export function checkBusinessSuiteAccess(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { 
+                    allowed: false, 
+                    redirectUrl: '/signup', 
+                    message: 'Member not found' 
+                };
+            }
+            
+            const member = results.items[0];
+            const memberTier = member.tier;
+            
+            // STRICT GATE: Basic users blocked from business suite
+            if (memberTier === 'basic') {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: 'Business Suite requires Pro membership or higher. Upgrade to access Digital SMS and Allergen Matrix.',
+                    currentTier: memberTier,
+                    requiredTier: 'pro',
+                    blockedFeature: 'business_suite'
+                };
+            }
+            
+            // Allow access for Pro, Pro Plus, Enterprise
+            return {
+                allowed: true,
+                memberId: memberId,
+                tier: memberTier,
+                message: 'Business Suite access granted'
+            };
+        });
+}
+
+// Download Protection - Disable download if UsageLogs < 20
+export function checkDownloadPermission(memberId, reportType) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { 
+                    allowed: false, 
+                    message: 'Member not found' 
+                };
+            }
+            
+            const member = results.items[0];
+            
+            // Check compliance entries for current month
+            const currentMonth = new Date();
+            const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+            
+            return wixData.query('UsageLogs')
+                .eq('memberId', memberId)
+                .ge('timestamp', monthStart)
+                .find()
+                .then(logResults => {
+                    const complianceEntries = logResults.items.filter(log => 
+                        log.action.includes('COMPLIANCE') || 
+                        log.action.includes('AUDIT') ||
+                        log.action.includes('SAFETY')
+                    );
+                    
+                    // STRICT REQUIREMENT: Minimum 20 compliance entries
+                    if (complianceEntries.length < 20) {
+                        return {
+                            allowed: false,
+                            message: `Download requires 20+ compliance entries. Current: ${complianceEntries.length}/20. Complete more compliance activities to unlock.`,
+                            currentEntries: complianceEntries.length,
+                            requiredEntries: 20,
+                            reportType: reportType,
+                            blockedReason: 'INSUFFICIENT_COMPLIANCE'
+                        };
+                    }
+                    
+                    return {
+                        allowed: true,
+                        memberId: memberId,
+                        tier: member.tier,
+                        complianceEntries: complianceEntries.length,
+                        reportType: reportType,
+                        message: 'Download permission granted'
+                    };
+                });
+        });
+}
+
+// Route Protection Middleware
+export function protectRoute(memberId, requiredTier, toolName) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const memberTier = member.tier;
+            
+            // Tier hierarchy: basic < pro < proplus < enterprise
+            const tierHierarchy = {
+                'basic': 1,
+                'pro': 2,
+                'proplus': 3,
+                'enterprise': 4
+            };
+            
+            const requiredLevel = tierHierarchy[requiredTier] || 0;
+            const memberLevel = tierHierarchy[memberTier] || 0;
+            
+            if (memberLevel < requiredLevel) {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: `This feature requires ${requiredTier} membership or higher`,
+                    currentTier: memberTier,
+                    requiredTier: requiredTier,
+                    toolName: toolName
+                };
+            }
+            
+            return {
+                allowed: true,
+                memberId: memberId,
+                tier: memberTier,
+                toolName: toolName
+            };
+        });
+}
+
+// Supplier Ledger Access - Only Pro Plus and Enterprise
+export function checkSupplierAccess(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { 
+                    allowed: false, 
+                    redirectUrl: '/signup', 
+                    message: 'Member not found' 
+                };
+            }
+            
+            const member = results.items[0];
+            const memberTier = member.tier;
+            
+            // STRICT GATE: Only Pro Plus and Enterprise
+            if (memberTier !== 'proplus' && memberTier !== 'enterprise') {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: 'Supplier Ledger requires Pro Plus or Enterprise membership.',
+                    currentTier: memberTier,
+                    requiredTier: 'proplus',
+                    blockedFeature: 'supplier_ledger'
+                };
+            }
+            
+            return {
+                allowed: true,
+                memberId: memberId,
+                tier: memberTier,
+                message: 'Supplier Ledger access granted'
+            };
+        });
+}
+
+// Multi-Staff Access - Enterprise only
+export function checkMultiStaffAccess(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { 
+                    allowed: false, 
+                    redirectUrl: '/signup', 
+                    message: 'Member not found' 
+                };
+            }
+            
+            const member = results.items[0];
+            const memberTier = member.tier;
+            
+            // STRICT GATE: Enterprise only
+            if (memberTier !== 'enterprise') {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: 'Multi-Staff access requires Enterprise membership.',
+                    currentTier: memberTier,
+                    requiredTier: 'enterprise',
+                    blockedFeature: 'multi_staff'
+                };
+            }
+            
+            return {
+                allowed: true,
+                memberId: memberId,
+                tier: memberTier,
+                isParent: !member.parentId,
+                message: 'Multi-Staff access granted'
+            };
+        });
+}
+
+// Audit Trail Access - Enterprise only
+export function checkAuditAccess(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { 
+                    allowed: false, 
+                    redirectUrl: '/signup', 
+                    message: 'Member not found' 
+                };
+            }
+            
+            const member = results.items[0];
+            const memberTier = member.tier;
+            
+            // STRICT GATE: Enterprise only
+            if (memberTier !== 'enterprise') {
+                return {
+                    allowed: false,
+                    redirectUrl: '/upgrade',
+                    message: 'Wholesale Audit Portal requires Enterprise membership.',
+                    currentTier: memberTier,
+                    requiredTier: 'enterprise',
+                    blockedFeature: 'wholesale_audit'
+                };
+            }
+            
+            return {
+                allowed: true,
+                memberId: memberId,
+                tier: memberTier,
+                message: 'Wholesale Audit Portal access granted'
+            };
+        });
+}
+
+// Registry Trust Score Check
+export function checkTrustScore(memberId, minimumScore = 80) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { 
+                    trusted: false, 
+                    message: 'Member not found' 
+                };
+            }
+            
+            const member = results.items[0];
+            const trustScore = member.trustScore || 0;
+            
+            if (trustScore < minimumScore) {
+                return {
+                    trusted: false,
+                    trustScore: trustScore,
+                    minimumScore: minimumScore,
+                    message: `Trust score ${trustScore} below minimum ${minimumScore}. Complete compliance activities to improve.`
+                };
+            }
+            
+            return {
+                trusted: true,
+                trustScore: trustScore,
+                message: 'Registry trust verified'
+            };
+        });
+}
+
+// Comprehensive access check for dashboard
+export function getMemberAccessProfile(memberId) {
+    return Promise.all([
+        checkCookbookAccess(memberId),
+        checkBusinessSuiteAccess(memberId),
+        checkSupplierAccess(memberId),
+        checkMultiStaffAccess(memberId),
+        checkAuditAccess(memberId),
+        checkTrustScore(memberId)
+    ]).then(results => {
+        return {
+            memberId: memberId,
+            cookbookAccess: results[0],
+            businessSuiteAccess: results[1],
+            supplierAccess: results[2],
+            multiStaffAccess: results[3],
+            auditAccess: results[4],
+            trustStatus: results[5],
+            overallAccess: results.every(r => r.allowed || r.trusted !== false)
+        };
+    });
+}

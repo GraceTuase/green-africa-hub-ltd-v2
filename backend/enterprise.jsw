@@ -1,0 +1,277 @@
+// Backend: enterprise.jsw - Enterprise Staff Management & Corporate Reports
+import wixData from 'wix-data';
+import { TIER_CONFIG } from './events';
+
+// Create staff sub-ID for Enterprise parent
+export function createStaffSubId(parentId, staffName, staffEmail) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', parentId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Parent Enterprise member not found');
+            }
+            
+            const parent = results.items[0];
+            
+            // Check if parent is Enterprise tier
+            if (parent.tier !== 'enterprise') {
+                throw new Error('Only Enterprise members can create staff sub-IDs');
+            }
+            
+            // Check current staff count
+            return wixData.query('MembersProfile')
+                .eq('parentId', parentId)
+                .find();
+        })
+        .then(staffResults => {
+            const currentStaffCount = staffResults.items.length;
+            const maxStaff = TIER_CONFIG.enterprise.maxStaffSubIds;
+            
+            if (currentStaffCount >= maxStaff) {
+                throw new Error(`Maximum staff limit reached (${maxStaff} sub-IDs)`);
+            }
+            
+            // Generate staff sub-ID
+            const staffNumber = currentStaffCount + 1;
+            const staffId = `${parentId}-ST-${staffNumber.toString().padStart(2, '0')}`;
+            
+            // Create staff member profile
+            return wixData.insert('MembersProfile', {
+                uniqueMemberId: staffId,
+                tier: 'enterprise',
+                monthlyMealCredits: TIER_CONFIG.enterprise.credits,
+                lifetimeCarbonSaved: 0,
+                attendanceStatus: 'Available',
+                checkInDate: null,
+                usageLogs: 0,
+                parentId: parentId,
+                allergenSettings: JSON.stringify(getDefaultAllergenSettings()),
+                qrCodeUrl: generateQRCodeUrl(staffId),
+                createdAt: new Date(),
+                email: staffEmail,
+                name: staffName,
+                registryCompliance: true,
+                trustScore: 100,
+                walletBalance: 0,
+                referralCode: null,
+                totalReferrals: 0,
+                totalReferralEarnings: 0
+            });
+        })
+        .then(result => {
+            return {
+                success: true,
+                staffId: result.uniqueMemberId,
+                staffName: staffName,
+                message: 'Staff sub-ID created successfully'
+            };
+        })
+        .catch(error => {
+            return {
+                success: false,
+                message: error.message
+            };
+        });
+}
+
+// Get all staff sub-IDs for Enterprise parent
+export function getEnterpriseStaff(parentId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', parentId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Enterprise parent not found');
+            }
+            
+            const parent = results.items[0];
+            
+            if (parent.tier !== 'enterprise') {
+                throw new Error('Only Enterprise members have staff sub-IDs');
+            }
+            
+            // Get all staff members
+            return wixData.query('MembersProfile')
+                .eq('parentId', parentId)
+                .find();
+        })
+        .then(staffResults => {
+            return {
+                parentId: parentId,
+                staffCount: staffResults.items.length,
+                maxStaff: TIER_CONFIG.enterprise.maxStaffSubIds,
+                staffMembers: staffResults.items.map(staff => ({
+                    staffId: staff.uniqueMemberId,
+                    name: staff.name,
+                    email: staff.email,
+                    monthlyMealCredits: staff.monthlyMealCredits,
+                    lifetimeCarbonSaved: staff.lifetimeCarbonSaved,
+                    attendanceStatus: staff.attendanceStatus,
+                    trustScore: staff.trustScore,
+                    createdAt: staff.createdAt
+                }))
+            };
+        });
+}
+
+// Generate Corporate ESG Impact Report
+export function generateCorporateESGReport(parentId, dateRange) {
+    return getEnterpriseStaff(parentId)
+        .then(staffData => {
+            // Get carbon data for all staff
+            const carbonPromises = staffData.staffMembers.map(staff => {
+                return getCarbonImpactDashboard(staff.staffId);
+            });
+            
+            return Promise.all(carbonPromises);
+        })
+        .then(carbonDataArray => {
+            // Aggregate carbon data
+            const totalLifetimeCarbon = carbonDataArray.reduce((sum, data) => sum + data.lifetimeCarbonSaved, 0);
+            const totalMonthlyCarbon = carbonDataArray.reduce((sum, data) => sum + data.monthlyCarbonSaved, 0);
+            const activeGreenBadges = carbonDataArray.filter(data => data.activeGreenBadge).length;
+            
+            // Get usage logs for all staff
+            return wixData.query('UsageLogs')
+                .contains('memberId', parentId) // This will match parent and all staff
+                .between('timestamp', dateRange.start, dateRange.end)
+                .find();
+        })
+        .then(usageResults => {
+            // Analyze usage patterns
+            const buffetRedemptions = usageResults.items.filter(log => log.action === 'BUFFET_REDEMPTION').length;
+            const carbonActivities = usageResults.items.filter(log => log.action.includes('CARBON')).length;
+            const businessActivities = usageResults.items.filter(log => log.compliance === 'BUSINESS').length;
+            
+            // Generate report data
+            const reportData = {
+                reportId: `ESG-${Date.now()}`,
+                parentId: parentId,
+                reportPeriod: dateRange,
+                generatedAt: new Date(),
+                
+                // Carbon Impact Summary
+                carbonImpact: {
+                    totalLifetimeCarbonSaved: totalLifetimeCarbon,
+                    totalMonthlyCarbonSaved: totalMonthlyCarbon,
+                    averageCarbonPerStaff: totalMonthlyCarbon / (staffData.staffCount || 1),
+                    activeGreenBadges: activeGreenBadges,
+                    greenBadgeRate: (activeGreenBadges / (staffData.staffCount || 1)) * 100
+                },
+                
+                // Staff Performance
+                staffPerformance: {
+                    totalStaff: staffData.staffCount,
+                    activeStaff: staffData.staffMembers.filter(staff => staff.attendanceStatus === 'CheckedIn').length,
+                    averageTrustScore: staffData.staffMembers.reduce((sum, staff) => sum + staff.trustScore, 0) / (staffData.staffCount || 1),
+                    totalCreditsUsed: staffData.staffMembers.reduce((sum, staff) => (TIER_CONFIG.enterprise.credits - staff.monthlyMealCredits), 0)
+                },
+                
+                // Business Activities
+                businessActivities: {
+                    buffetRedemptions: buffetRedemptions,
+                    carbonActivities: carbonActivities,
+                    businessActivities: businessActivities,
+                    totalActivities: usageResults.items.length
+                },
+                
+                // ESG Metrics
+                esgMetrics: {
+                    environmentalScore: calculateEnvironmentalScore(totalMonthlyCarbon, staffData.staffCount),
+                    socialScore: calculateSocialScore(activeGreenBadges, staffData.staffCount),
+                    governanceScore: calculateGovernanceScore(usageResults.items.length, staffData.staffCount),
+                    overallESGScore: 0 // Will be calculated below
+                }
+            };
+            
+            // Calculate overall ESG score
+            reportData.esgMetrics.overallESGScore = (
+                reportData.esgMetrics.environmentalScore +
+                reportData.esgMetrics.socialScore +
+                reportData.esgMetrics.governanceScore
+            ) / 3;
+            
+            // Save report to database
+            return wixData.insert('ESGReports', reportData);
+        })
+        .then(result => {
+            return {
+                success: true,
+                reportId: result.reportId,
+                reportData: result,
+                message: 'Corporate ESG report generated successfully'
+            };
+        })
+        .catch(error => {
+            return {
+                success: false,
+                message: error.message
+            };
+        });
+}
+
+// Get ESG reports for Enterprise member
+export function getEnterpriseESGReports(parentId, limit = 10) {
+    return wixData.query('ESGReports')
+        .eq('parentId', parentId)
+        .descending('generatedAt')
+        .limit(limit)
+        .find()
+        .then(results => {
+            return {
+                parentId: parentId,
+                reports: results.items,
+                totalReports: results.totalCount
+            };
+        });
+}
+
+// Helper functions
+function getDefaultAllergenSettings() {
+    return {
+        gluten: false, dairy: false, eggs: false, soy: false,
+        peanuts: false, treeNuts: false, shellfish: false, fish: false,
+        sesame: false, mustard: false, celery: false, lupin: false,
+        molluscs: false, sulphites: false
+    };
+}
+
+function generateQRCodeUrl(memberId) {
+    return `https://www.greenafricahub.org/registry/${memberId}`;
+}
+
+function calculateEnvironmentalScore(totalCarbon, staffCount) {
+    // Score based on carbon savings per staff member
+    const carbonPerStaff = totalCarbon / (staffCount || 1);
+    if (carbonPerStaff >= 100) return 100;
+    if (carbonPerStaff >= 50) return 80;
+    if (carbonPerStaff >= 25) return 60;
+    if (carbonPerStaff >= 10) return 40;
+    return 20;
+}
+
+function calculateSocialScore(activeBadges, staffCount) {
+    // Score based on green badge participation
+    const participationRate = (activeBadges / (staffCount || 1)) * 100;
+    if (participationRate >= 80) return 100;
+    if (participationRate >= 60) return 80;
+    if (participationRate >= 40) return 60;
+    if (participationRate >= 20) return 40;
+    return 20;
+}
+
+function calculateGovernanceScore(totalActivities, staffCount) {
+    // Score based on activity engagement
+    const activitiesPerStaff = totalActivities / (staffCount || 1);
+    if (activitiesPerStaff >= 20) return 100;
+    if (activitiesPerStaff >= 15) return 80;
+    if (activitiesPerStaff >= 10) return 60;
+    if (activitiesPerStaff >= 5) return 40;
+    return 20;
+}
+
+// Import carbon dashboard function
+import { getCarbonImpactDashboard } from './carbon-impact';

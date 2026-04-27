@@ -1,0 +1,417 @@
+// Backend: ai-dashboard.jsw - AI Dashboard Integration with Python/Power BI Logic
+import wixData from 'wix-data';
+import fetch from 'node-fetch';
+
+// AI Dashboard Configuration
+const AI_CONFIG = {
+    pythonApiUrl: 'https://your-python-api.com/green-africa-hub', // Replace with actual Python API
+    powerBiUrl: 'https://api.powerbi.com/v1.0/your-workspace', // Replace with actual Power BI API
+    aiModels: {
+        carbonPrediction: '/predict-carbon',
+        sustainabilityScore: '/calculate-sustainability',
+        trendAnalysis: '/analyze-trends',
+        recommendations: '/get-recommendations'
+    }
+};
+
+// Get AI-powered carbon predictions for member
+export function getAICarbonPredictions(memberId, timeHorizon = 30) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Check if member has AI Dashboard access
+            const eligibleTiers = ['pro', 'proplus', 'enterprise'];
+            if (!eligibleTiers.includes(member.tier)) {
+                return {
+                    success: false,
+                    message: 'AI Dashboard available for Pro+ members only',
+                    tier: member.tier
+                };
+            }
+            
+            // Get member's historical data
+            return getMemberHistoricalData(memberId);
+        })
+        .then(historicalData => {
+            // Call Python AI API for predictions
+            return callPythonAPI(AI_CONFIG.aiModels.carbonPrediction, {
+                memberId: memberId,
+                historicalData: historicalData,
+                timeHorizon: timeHorizon,
+                currentCarbonSaved: historicalData.lifetimeCarbonSaved
+            });
+        })
+        .then(predictions => {
+            return {
+                success: true,
+                memberId: memberId,
+                timeHorizon: timeHorizon,
+                predictions: predictions,
+                generatedAt: new Date()
+            };
+        })
+        .catch(error => {
+            console.error('AI prediction error:', error);
+            return {
+                success: false,
+                message: 'Failed to generate AI predictions'
+            };
+        });
+}
+
+// Get sustainability score with AI analysis
+export function getAISustainabilityScore(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Check AI access
+            const eligibleTiers = ['pro', 'proplus', 'enterprise'];
+            if (!eligibleTiers.includes(member.tier)) {
+                return {
+                    success: false,
+                    message: 'AI sustainability scoring available for Pro+ members only'
+                };
+            }
+            
+            // Collect comprehensive data for AI analysis
+            return Promise.all([
+                getCarbonImpactDashboard(memberId),
+                getReferralStats(memberId),
+                getUsageLogs(memberId, 90), // Last 90 days
+                getBusinessActivities(memberId)
+            ]);
+        })
+        .then(([carbonData, referralData, usageLogs, businessData]) => {
+            // Call AI API for sustainability scoring
+            return callPythonAPI(AI_CONFIG.aiModels.sustainabilityScore, {
+                memberId: memberId,
+                carbonData: carbonData,
+                referralData: referralData,
+                usageData: usageLogs,
+                businessData: businessData,
+                scoringDate: new Date()
+            });
+        })
+        .then(scoreResult => {
+            // Save AI score to database
+            return wixData.insert('AIScores', {
+                scoreId: `AI-SCORE-${Date.now()}`,
+                memberId: memberId,
+                sustainabilityScore: scoreResult.overallScore,
+                environmentalScore: scoreResult.environmentalScore,
+                socialScore: scoreResult.socialScore,
+                economicScore: scoreResult.economicScore,
+                aiInsights: JSON.stringify(scoreResult.insights),
+                recommendations: JSON.stringify(scoreResult.recommendations),
+                generatedAt: new Date()
+            });
+        })
+        .then(result => {
+            return {
+                success: true,
+                memberId: memberId,
+                scoreData: result,
+                message: 'AI sustainability score generated successfully'
+            };
+        })
+        .catch(error => {
+            console.error('AI scoring error:', error);
+            return {
+                success: false,
+                message: 'Failed to generate AI sustainability score'
+            };
+        });
+}
+
+// Get AI-powered trend analysis
+export function getAITrendAnalysis(memberId, analysisType = 'carbon') {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Check AI access
+            const eligibleTiers = ['proplus', 'enterprise'];
+            if (!eligibleTiers.includes(member.tier)) {
+                return {
+                    success: false,
+                    message: 'AI trend analysis available for Pro+ and Enterprise members only'
+                };
+            }
+            
+            // Get extended historical data for trend analysis
+            return getExtendedHistoricalData(memberId, 180); // 6 months
+        })
+        .then(historicalData => {
+            // Call AI API for trend analysis
+            return callPythonAPI(AI_CONFIG.aiModels.trendAnalysis, {
+                memberId: memberId,
+                data: historicalData,
+                analysisType: analysisType,
+                period: 180, // 6 months
+                analysisDate: new Date()
+            });
+        })
+        .then(trendResult => {
+            return {
+                success: true,
+                memberId: memberId,
+                analysisType: analysisType,
+                trends: trendResult,
+                generatedAt: new Date()
+            };
+        })
+        .catch(error => {
+            console.error('AI trend analysis error:', error);
+            return {
+                success: false,
+                message: 'Failed to generate AI trend analysis'
+            };
+        });
+}
+
+// Get AI-powered recommendations
+export function getAIRecommendations(memberId, recommendationType = 'sustainability') {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // Check AI access
+            const eligibleTiers = ['pro', 'proplus', 'enterprise'];
+            if (!eligibleTiers.includes(member.tier)) {
+                return {
+                    success: false,
+                    message: 'AI recommendations available for Pro+ members only'
+                };
+            }
+            
+            // Get member data for recommendations
+            return Promise.all([
+                getCarbonImpactDashboard(memberId),
+                getMemberHistoricalData(memberId),
+                getBusinessActivities(memberId)
+            ]);
+        })
+        .then(([carbonData, historicalData, businessData]) => {
+            // Call AI API for recommendations
+            return callPythonAPI(AI_CONFIG.aiModels.recommendations, {
+                memberId: memberId,
+                carbonData: carbonData,
+                historicalData: historicalData,
+                businessData: businessData,
+                recommendationType: recommendationType,
+                tier: member.tier,
+                generatedAt: new Date()
+            });
+        })
+        .then(recommendations => {
+            return {
+                success: true,
+                memberId: memberId,
+                recommendationType: recommendationType,
+                recommendations: recommendations,
+                generatedAt: new Date()
+            };
+        })
+        .catch(error => {
+            console.error('AI recommendations error:', error);
+            return {
+                success: false,
+                message: 'Failed to generate AI recommendations'
+            };
+        });
+}
+
+// Get comprehensive AI dashboard data
+export function getAIDashboardData(memberId) {
+    return Promise.all([
+        getAICarbonPredictions(memberId),
+        getAISustainabilityScore(memberId),
+        getAITrendAnalysis(memberId),
+        getAIRecommendations(memberId)
+    ])
+    .then(([predictions, score, trends, recommendations]) => {
+        return {
+            memberId: memberId,
+            dashboardData: {
+                carbonPredictions: predictions.success ? predictions.predictions : null,
+                sustainabilityScore: score.success ? score.scoreData : null,
+                trendAnalysis: trends.success ? trends.trends : null,
+                recommendations: recommendations.success ? recommendations.recommendations : null
+            },
+            generatedAt: new Date(),
+            dataCompleteness: {
+                predictions: predictions.success,
+                score: score.success,
+                trends: trends.success,
+                recommendations: recommendations.success
+            }
+        };
+    })
+    .catch(error => {
+        console.error('AI dashboard error:', error);
+        return {
+            success: false,
+            message: 'Failed to generate AI dashboard data'
+        };
+    });
+}
+
+// Call Python AI API
+function callPythonAPI(endpoint, data) {
+    // In production, replace with actual API call
+    console.log(`AI API call to ${endpoint} with data:`, data);
+    
+    // Simulate AI API response
+    return Promise.resolve({
+        carbonPredictions: {
+            next30Days: Math.random() * 50 + 10, // 10-60 kg CO2
+            next90Days: Math.random() * 150 + 30, // 30-180 kg CO2
+            confidence: 0.85,
+            factors: ['seasonal_trends', 'historical_patterns', 'member_activity']
+        },
+        sustainabilityScore: {
+            overallScore: Math.random() * 30 + 70, // 70-100
+            environmentalScore: Math.random() * 25 + 75, // 75-100
+            socialScore: Math.random() * 30 + 70, // 70-100
+            economicScore: Math.random() * 35 + 65, // 65-100
+            insights: [
+                'Strong carbon reduction performance',
+                'High engagement in sustainability activities',
+                'Opportunity for improvement in waste reduction'
+            ],
+            recommendations: [
+                'Increase local sourcing to reduce transport emissions',
+                'Implement waste tracking system',
+                'Expand sustainable menu options'
+            ]
+        },
+        trendAnalysis: {
+            carbonTrend: 'increasing',
+            engagementTrend: 'stable',
+            efficiencyTrend: 'improving',
+            seasonalPatterns: detected,
+            keyDrivers: ['menu_changes', 'supplier_switches', 'operational_efficiency']
+        },
+        recommendations: [
+            {
+                category: 'carbon_reduction',
+                priority: 'high',
+                action: 'Switch to local suppliers for 30% of ingredients',
+                impact: '15-20kg CO2 reduction per month',
+                feasibility: 0.8
+            },
+            {
+                category: 'cost_optimization',
+                priority: 'medium',
+                action: 'Implement batch cooking schedules',
+                impact: '5-10% cost reduction',
+                feasibility: 0.9
+            }
+        ]
+    });
+    
+    /*
+    // Actual API call would look like:
+    return fetch(`${AI_CONFIG.pythonApiUrl}${endpoint}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${AI_CONFIG.apiKey}`
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.error) {
+            throw new Error(result.error);
+        }
+        return result;
+    });
+    */
+}
+
+// Helper functions to get member data
+function getMemberHistoricalData(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            return results.items[0];
+        });
+}
+
+function getExtendedHistoricalData(memberId, days) {
+    const startDate = new Date(Date.now() - (days * 24 * 60 * 60 * 1000));
+    
+    return wixData.query('UsageLogs')
+        .eq('memberId', memberId)
+        .ge('timestamp', startDate)
+        .find()
+        .then(results => {
+            return {
+                memberId: memberId,
+                period: days,
+                usageLogs: results.items,
+                startDate: startDate,
+                endDate: new Date()
+            };
+        });
+}
+
+function getUsageLogs(memberId, days) {
+    const startDate = new Date(Date.now() - (days * 24 * 60 * 60 * 1000));
+    
+    return wixData.query('UsageLogs')
+        .eq('memberId', memberId)
+        .ge('timestamp', startDate)
+        .find()
+        .then(results => results.items);
+}
+
+function getBusinessActivities(memberId) {
+    return wixData.query('UsageLogs')
+        .eq('memberId', memberId)
+        .contains('compliance', 'BUSINESS')
+        .descending('timestamp')
+        .limit(50)
+        .find()
+        .then(results => results.items);
+}
+
+// Import required functions
+import { getCarbonImpactDashboard } from './carbon-impact';
+import { getReferralStats } from './referral';

@@ -1,0 +1,212 @@
+// Backend: redemption.jsw - All-In Buffet Redemption System
+import wixData from 'wix-data';
+import { calculateTriplePillarSavings, updateMemberCarbonSaved } from './carbon-impact';
+import { getTierCredits } from './events';
+
+// All-In Buffet Redemption - Deduct FULL Monthly Allotment at Once
+export function redeemMeal(memberId, dailyMenuIngredients = null) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Registry Member not found');
+            }
+            
+            const member = results.items[0];
+            
+            // STRICT CHECK: Already checked in this month?
+            if (member.attendanceStatus === 'CheckedIn') {
+                throw new Error('Monthly buffet already redeemed. No carry-over permitted - Registry of Trust compliance.');
+            }
+            
+            // STRICT CHECK: Available credits?
+            if (member.monthlyMealCredits <= 0) {
+                throw new Error('No monthly credits available. Please upgrade your tier.');
+            }
+            
+            // Get tier credits (FULL ALLOTMENT - deduct ALL at once)
+            const tierCredits = getTierCredits(member.tier);
+            const newCreditBalance = 0; // Set to 0 - NO CARRY-OVER permitted
+            
+            // Registry Message: All-In Activation
+            const redemptionMessage = `Good news! Your monthly credits are activated for today's buffet. Enjoy your ${tierCredits} portions! (No carry-over permitted.)`;
+            
+            // Calculate carbon impact if daily menu provided
+            let carbonImpact = null;
+            if (dailyMenuIngredients && dailyMenuIngredients.length > 0) {
+                return calculateTriplePillarSavings(memberId, dailyMenuIngredients)
+                    .then(carbonResult => {
+                        carbonImpact = carbonResult;
+                        
+                        // Update member's lifetime carbon saved
+                        return updateMemberCarbonSaved(memberId, carbonResult.totalCarbon);
+                    })
+                    .then(() => {
+                        // Update member profile with ALL-IN redemption
+                        return wixData.update('MembersProfile', member._id, {
+                            monthlyMealCredits: newCreditBalance,
+                            attendanceStatus: 'CheckedIn',
+                            checkInDate: new Date(),
+                            usageLogs: member.usageLogs + 1,
+                            lastRedemptionDate: new Date(),
+                            redemptionType: 'ALL_IN_BUFFET',
+                            portionsActivated: tierCredits
+                        });
+                    })
+                    .then(() => {
+                        return {
+                            success: true,
+                            message: redemptionMessage,
+                            carbonImpact: carbonImpact,
+                            memberId: memberId,
+                            tier: member.tier,
+                            portionsActivated: tierCredits,
+                            remainingCredits: newCreditBalance,
+                            attendanceStatus: 'CheckedIn',
+                            registryCompliance: true,
+                            activeGreenBadge: true
+                        };
+                    });
+            } else {
+                // No carbon calculation - just update credits
+                return wixData.update('MembersProfile', member._id, {
+                    monthlyMealCredits: newCreditBalance,
+                    attendanceStatus: 'CheckedIn',
+                    checkInDate: new Date(),
+                    usageLogs: member.usageLogs + 1,
+                    lastRedemptionDate: new Date(),
+                    redemptionType: 'ALL_IN_BUFFET',
+                    portionsActivated: tierCredits
+                }).then(() => {
+                    return {
+                        success: true,
+                        message: redemptionMessage,
+                        memberId: memberId,
+                        tier: member.tier,
+                        portionsActivated: tierCredits,
+                        remainingCredits: newCreditBalance,
+                        attendanceStatus: 'CheckedIn',
+                        registryCompliance: true,
+                        activeGreenBadge: true
+                    };
+                });
+            }
+        });
+}
+
+// Check redemption status for dashboard
+export function checkRedemptionStatus(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { status: 'not_found', message: 'Member not found' };
+            }
+            
+            const member = results.items[0];
+            
+            return {
+                status: member.attendanceStatus,
+                creditsRemaining: member.monthlyMealCredits,
+                lastRedemption: member.lastRedemptionDate,
+                portionsActivated: member.portionsActivated || 0,
+                canRedeem: member.attendanceStatus !== 'CheckedIn' && member.monthlyMealCredits > 0,
+                activeGreenBadge: member.attendanceStatus === 'CheckedIn',
+                tier: member.tier
+            };
+        });
+}
+
+// Get redemption history for member
+export function getRedemptionHistory(memberId, limit = 10) {
+    return wixData.query('UsageLogs')
+        .eq('memberId', memberId)
+        .eq('action', 'BUFFET_REDEMPTION')
+        .descending('timestamp')
+        .limit(limit)
+        .find();
+}
+
+// Monthly reset job - Reset all credits on 1st of each month at 00:01
+export function resetMonthlyCredits() {
+    const today = new Date();
+    const isFirstOfMonth = today.getDate() === 1 && today.getHours() === 0 && today.getMinutes() <= 1;
+    
+    if (!isFirstOfMonth) {
+        return { 
+            success: false, 
+            message: 'Not scheduled time for monthly reset',
+            nextReset: getNextResetDate()
+        };
+    }
+    
+    // Get all members and reset their credits
+    return wixData.query('MembersProfile')
+        .find()
+        .then(results => {
+            const resetPromises = results.items.map(member => {
+                const tierCredits = getTierCredits(member.tier);
+                
+                return wixData.update('MembersProfile', member._id, {
+                    monthlyMealCredits: tierCredits,
+                    attendanceStatus: 'Available',
+                    checkInDate: null,
+                    lastResetDate: new Date(),
+                    registryCompliance: true
+                });
+            });
+            
+            return Promise.all(resetPromises);
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: 'Monthly credits reset successfully',
+                resetDate: new Date(),
+                membersReset: results.items.length
+            };
+        });
+}
+
+// Get next reset date for dashboard
+function getNextResetDate() {
+    const now = new Date();
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 1, 0, 0);
+    return nextMonth;
+}
+
+// Force redemption for admin (emergency use only)
+export function forceRedemption(memberId, reason) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                throw new Error('Member not found');
+            }
+            
+            const member = results.items[0];
+            const tierCredits = getTierCredits(member.tier);
+            
+            return wixData.update('MembersProfile', member._id, {
+                attendanceStatus: 'CheckedIn',
+                checkInDate: new Date(),
+                forceRedemption: true,
+                forceRedemptionReason: reason,
+                forceRedemptionDate: new Date(),
+                portionsActivated: tierCredits
+            });
+        })
+        .then(() => {
+            return {
+                success: true,
+                message: `Force redemption completed: ${reason}`,
+                memberId: memberId
+            };
+        });
+}

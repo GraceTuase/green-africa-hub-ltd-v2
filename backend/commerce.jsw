@@ -1,0 +1,352 @@
+// Backend: commerce.jsw - Commerce System with Service Charges & Member Benefits
+import wixData from 'wix-data';
+import { TIER_CONFIG } from './events';
+
+// Calculate service charge based on membership status
+export function calculateServiceCharge(memberId, orderAmount, itemCount) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            let serviceCharge = 0;
+            let isMember = results.items.length > 0;
+            
+            if (!isMember) {
+                // NON-MEMBER: Service charge 15-20% based on quantity
+                if (itemCount <= 5) {
+                    serviceCharge = orderAmount * 0.20; // 20% for small orders
+                } else if (itemCount <= 20) {
+                    serviceCharge = orderAmount * 0.175; // 17.5% for medium orders
+                } else {
+                    serviceCharge = orderAmount * 0.15; // 15% for large orders
+                }
+            }
+            
+            return {
+                isMember: isMember,
+                serviceCharge: serviceCharge,
+                serviceChargeRate: isMember ? 0 : (serviceCharge / orderAmount),
+                finalAmount: orderAmount + serviceCharge
+            };
+        })
+        .catch(error => {
+            // If member lookup fails, treat as non-member
+            const serviceCharge = itemCount <= 5 ? orderAmount * 0.20 : 
+                                 itemCount <= 20 ? orderAmount * 0.175 : 
+                                 orderAmount * 0.15;
+            
+            return {
+                isMember: false,
+                serviceCharge: serviceCharge,
+                serviceChargeRate: serviceCharge / orderAmount,
+                finalAmount: orderAmount + serviceCharge
+            };
+        });
+}
+
+// Apply flagship discount based on membership tier
+export function applyFlagshipDiscount(memberId, orderAmount) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return {
+                    isMember: false,
+                    discountAmount: 0,
+                    discountRate: 0,
+                    finalAmount: orderAmount
+                };
+            }
+            
+            const member = results.items[0];
+            const tierConfig = TIER_CONFIG[member.tier];
+            const discountRate = tierConfig ? tierConfig.flagshipDiscount / 100 : 0;
+            const discountAmount = orderAmount * discountRate;
+            
+            return {
+                isMember: true,
+                tier: member.tier,
+                discountAmount: discountAmount,
+                discountRate: discountRate,
+                finalAmount: orderAmount - discountAmount
+            };
+        })
+        .catch(error => {
+            return {
+                isMember: false,
+                discountAmount: 0,
+                discountRate: 0,
+                finalAmount: orderAmount
+            };
+        });
+}
+
+// Check if member can list items for sale (PRO+ tiers only)
+export function checkListForSaleAccess(memberId) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return {
+                    allowed: false,
+                    message: 'Member not found'
+                };
+            }
+            
+            const member = results.items[0];
+            const allowedTiers = ['pro', 'proplus', 'enterprise'];
+            
+            if (!allowedTiers.includes(member.tier)) {
+                return {
+                    allowed: false,
+                    message: 'List for Sale requires Pro membership or higher',
+                    currentTier: member.tier,
+                    requiredTier: 'pro'
+                };
+            }
+            
+            return {
+                allowed: true,
+                tier: member.tier,
+                message: 'List for Sale access granted'
+            };
+        });
+}
+
+// Process bulk shop order with wallet integration
+export function processBulkShopOrder(memberId, orderItems, useWalletBalance = false) {
+    const orderAmount = orderItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+    const itemCount = orderItems.reduce((total, item) => total + item.quantity, 0);
+    
+    return Promise.all([
+        calculateServiceCharge(memberId, orderAmount, itemCount),
+        applyFlagshipDiscount(memberId, orderAmount)
+    ])
+    .then(([serviceChargeResult, discountResult]) => {
+        let finalAmount = orderAmount;
+        let adjustments = [];
+        
+        // Apply flagship discount first
+        if (discountResult.discountAmount > 0) {
+            finalAmount -= discountResult.discountAmount;
+            adjustments.push({
+                type: 'flagship_discount',
+                amount: -discountResult.discountAmount,
+                rate: discountResult.discountRate,
+                description: `${discountResult.tier} member discount`
+            });
+        }
+        
+        // Apply service charge
+        if (serviceChargeResult.serviceCharge > 0) {
+            finalAmount += serviceChargeResult.serviceCharge;
+            adjustments.push({
+                type: 'service_charge',
+                amount: serviceChargeResult.serviceCharge,
+                rate: serviceChargeResult.serviceChargeRate,
+                description: serviceChargeResult.isMember ? 'Member (0%)' : 'Non-member service charge'
+            });
+        }
+        
+        // Use wallet balance if requested
+        if (useWalletBalance && serviceChargeResult.isMember) {
+            return useWalletForOrder(memberId, finalAmount)
+                .then(walletResult => {
+                    if (walletResult.success) {
+                        adjustments.push({
+                            type: 'wallet_payment',
+                            amount: -walletResult.amountUsed,
+                            description: 'Wallet balance applied'
+                        });
+                        
+                        return {
+                            success: true,
+                            orderAmount: orderAmount,
+                            finalAmount: finalAmount - walletResult.amountUsed,
+                            amountPaid: walletResult.amountUsed,
+                            walletUsed: walletResult.amountUsed,
+                            remainingWalletBalance: walletResult.remainingBalance,
+                            adjustments: adjustments,
+                            isMember: serviceChargeResult.isMember,
+                            tier: discountResult.tier
+                        };
+                    } else {
+                        return {
+                            success: false,
+                            message: walletResult.message,
+                            orderAmount: orderAmount,
+                            finalAmount: finalAmount,
+                            adjustments: adjustments,
+                            isMember: serviceChargeResult.isMember,
+                            tier: discountResult.tier
+                        };
+                    }
+                });
+        }
+        
+        return {
+            success: true,
+            orderAmount: orderAmount,
+            finalAmount: finalAmount,
+            adjustments: adjustments,
+            isMember: serviceChargeResult.isMember,
+            tier: discountResult.tier
+        };
+    });
+}
+
+// Use wallet balance for order payment
+function useWalletForOrder(memberId, orderAmount) {
+    return wixData.query('MembersProfile')
+        .eq('uniqueMemberId', memberId)
+        .limit(1)
+        .find()
+        .then(results => {
+            if (results.items.length === 0) {
+                return { success: false, message: 'Member not found' };
+            }
+            
+            const member = results.items[0];
+            const walletBalance = member.walletBalance || 0;
+            
+            if (walletBalance <= 0) {
+                return { success: false, message: 'No wallet balance available' };
+            }
+            
+            const amountToUse = Math.min(walletBalance, orderAmount);
+            const remainingBalance = walletBalance - amountToUse;
+            
+            // Update wallet balance
+            return wixData.update('MembersProfile', member._id, {
+                walletBalance: remainingBalance
+            })
+            .then(() => {
+                // Log wallet usage
+                return wixData.insert('UsageLogs', {
+                    logId: `WALLET-${Date.now()}`,
+                    memberId: memberId,
+                    action: 'WALLET_PURCHASE',
+                    timestamp: new Date(),
+                    compliance: 'BULK_SHOP_PURCHASE',
+                    registryTrust: true,
+                    amount: amountToUse,
+                    remainingBalance: remainingBalance
+                });
+            })
+            .then(() => {
+                return {
+                    success: true,
+                    amountUsed: amountToUse,
+                    remainingBalance: remainingBalance
+                };
+            });
+        });
+}
+
+// Create listing for member who wants to sell bulk items
+export function createBulkListing(memberId, listingData) {
+    return checkListForSaleAccess(memberId)
+        .then(accessResult => {
+            if (!accessResult.allowed) {
+                throw new Error(accessResult.message);
+            }
+            
+            // Create the bulk listing
+            return wixData.insert('BulkListings', {
+                listingId: `BULK-${Date.now()}`,
+                sellerId: memberId,
+                productName: listingData.productName,
+                description: listingData.description,
+                price: listingData.price,
+                quantity: listingData.quantity,
+                unit: listingData.unit,
+                category: listingData.category,
+                images: listingData.images || [],
+                location: listingData.location,
+                availableUntil: listingData.availableUntil,
+                status: 'active',
+                createdAt: new Date(),
+                tier: accessResult.tier
+            });
+        })
+        .then(result => {
+            return {
+                success: true,
+                listingId: result.listingId,
+                message: 'Bulk listing created successfully'
+            };
+        })
+        .catch(error => {
+            return {
+                success: false,
+                message: error.message
+            };
+        });
+}
+
+// Get member's bulk listings
+export function getMemberBulkListings(memberId) {
+    return wixData.query('BulkListings')
+        .eq('sellerId', memberId)
+        .eq('status', 'active')
+        .descending('createdAt')
+        .find()
+        .then(results => {
+            return {
+                memberId: memberId,
+                listings: results.items,
+                totalListings: results.items.length
+            };
+        });
+}
+
+// Get all active bulk listings (for marketplace)
+export function getAllBulkListings(limit = 50) {
+    return wixData.query('BulkListings')
+        .eq('status', 'active')
+        .descending('createdAt')
+        .limit(limit)
+        .find()
+        .then(results => {
+            return {
+                listings: results.items,
+                totalCount: results.totalCount
+            };
+        });
+}
+
+// Calculate commerce summary for member dashboard
+export function getCommerceSummary(memberId) {
+    return Promise.all([
+        getReferralStats(memberId),
+        getMemberBulkListings(memberId),
+        wixData.query('UsageLogs')
+            .eq('memberId', memberId)
+            .eq('action', 'WALLET_PURCHASE')
+            .descending('timestamp')
+            .limit(10)
+            .find()
+    ])
+    .then(([referralStats, listingStats, purchaseHistory]) => {
+        return {
+            memberId: memberId,
+            walletBalance: referralStats.walletBalance,
+            totalReferrals: referralStats.totalReferrals,
+            totalReferralEarnings: referralStats.totalReferralEarnings,
+            activeListings: listingStats.totalListings,
+            recentPurchases: purchaseHistory.items.map(purchase => ({
+                amount: purchase.amount,
+                timestamp: purchase.timestamp,
+                remainingBalance: purchase.remainingBalance
+            }))
+        };
+    });
+}
+
+// Import referral functions
+import { getReferralStats } from './referral';
