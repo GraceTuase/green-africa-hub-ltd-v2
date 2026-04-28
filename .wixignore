@@ -1,0 +1,22 @@
+# Exclude backend files from Wix sync
+backend/
+*.jsw
+# Exclude documentation files
+*.md
+# Exclude other non-frontend files
+.git/
+.gitignore
+package.json
+assets/
+docs/
+src/
+tests/
+public/
+# Keep only frontend files
+!dashboard.html
+!business-suite.html
+!login.html
+!dashboard.css
+!dashboard.js
+!business-suite.js
+!login.js
