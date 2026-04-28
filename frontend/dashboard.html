@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Green Africa Hub - Member Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="dashboard.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50">
+    <!-- Navigation Header -->
+    <nav class="bg-green-700 text-white shadow-lg sticky top-0 z-50">
+        <div class="container mx-auto px-4">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center">
+                        <i class="fas fa-leaf text-green-300 text-2xl mr-2"></i>
+                        <span class="font-bold text-xl">Green Africa Hub</span>
+                    </div>
+                    <span class="text-green-200 text-sm">Registry of Trust</span>
+                </div>
+                
+                <div class="hidden md:flex items-center space-x-6">
+                    <a href="#dashboard" class="hover:text-green-200 transition">Dashboard</a>
+                    <a href="#carbon" class="hover:text-green-200 transition">Carbon Impact</a>
+                    <a href="#allergen" class="hover:text-green-200 transition">Allergen Matrix</a>
+                    <a href="#referral" class="hover:text-green-200 transition">Referrals</a>
+                    <a href="#business" class="hover:text-green-200 transition">Business Suite</a>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <div class="relative">
+                        <button class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded-lg transition flex items-center">
+                            <i class="fas fa-user-circle mr-2"></i>
+                            <span id="navMemberName">Loading...</span>
+                        </button>
+                    </div>
+                    <button id="logoutBtn" class="bg-red-600 hover:bg-red-500 px-3 py-2 rounded-lg transition">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Dashboard Container -->
+    <main class="container mx-auto px-4 py-8">
+        <!-- Welcome Section -->
+        <section class="mb-8">
+            <div class="bg-gradient-to-r from-green-600 to-green-700 rounded-2xl p-8 text-white shadow-xl">
+                <div class="flex flex-col md:flex-row justify-between items-center">
+                    <div>
+                        <h1 class="text-3xl font-bold mb-2">Welcome back, <span id="memberName">Member</span>!</h1>
+                        <p class="text-green-100 mb-4">Your sustainable food journey continues</p>
+                        <div class="flex flex-wrap gap-4">
+                            <div class="bg-white/20 rounded-lg px-4 py-2">
+                                <span class="text-sm text-green-100">Member ID</span>
+                                <p class="font-bold" id="memberId">Loading...</p>
+                            </div>
+                            <div class="bg-white/20 rounded-lg px-4 py-2">
+                                <span class="text-sm text-green-100">Membership Tier</span>
+                                <p class="font-bold" id="memberTier">Loading...</p>
+                            </div>
+                            <div class="bg-white/20 rounded-lg px-4 py-2">
+                                <span class="text-sm text-green-100">Trust Score</span>
+                                <p class="font-bold" id="trustScore">Loading...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-6 md:mt-0">
+                        <div id="activeBadgeContainer" class="hidden">
+                            <div class="bg-green-500 rounded-full p-6 shadow-lg animate-pulse">
+                                <i class="fas fa-leaf text-4xl text-white"></i>
+                                <p class="text-center mt-2 font-bold">Active Green Badge</p>
+                            </div>
+                        </div>
+                        <button id="redeemButton" class="bg-green-500 hover:bg-green-400 text-white px-6 py-3 rounded-lg font-bold transition shadow-lg">
+                            <i class="fas fa-ticket-alt mr-2"></i>
+                            Redeem Monthly Buffet
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quick Stats Grid -->
+        <section class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="bg-green-100 rounded-lg p-3">
+                        <i class="fas fa-leaf text-green-600 text-xl"></i>
+                    </div>
+                    <span class="text-sm text-gray-500">Lifetime</span>
+                </div>
+                <h3 class="text-2xl font-bold text-gray-800" id="lifetimeCarbonSaved">0 kg</h3>
+                <p class="text-gray-600 text-sm">CO₂ Saved</p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="bg-blue-100 rounded-lg p-3">
+                        <i class="fas fa-calendar-alt text-blue-600 text-xl"></i>
+                    </div>
+                    <span class="text-sm text-gray-500">Monthly</span>
+                </div>
+                <h3 class="text-2xl font-bold text-gray-800" id="monthlyCarbonSaved">0 kg</h3>
+                <p class="text-gray-600 text-sm">CO₂ This Month</p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="bg-purple-100 rounded-lg p-3">
+                        <i class="fas fa-ticket-alt text-purple-600 text-xl"></i>
+                    </div>
+                    <span class="text-sm text-gray-500">Credits</span>
+                </div>
+                <h3 class="text-2xl font-bold text-gray-800" id="creditsRemaining">0</h3>
+                <p class="text-gray-600 text-sm">Meal Credits</p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="bg-yellow-100 rounded-lg p-3">
+                        <i class="fas fa-clock text-yellow-600 text-xl"></i>
+                    </div>
+                    <span class="text-sm text-gray-500">Reset</span>
+                </div>
+                <h3 class="text-lg font-bold text-gray-800" id="resetCountdown">0d 0h 0m</h3>
+                <p class="text-gray-600 text-sm">Until Reset</p>
+            </div>
+        </section>
+
+        <!-- Carbon Impact Section -->
+        <section id="carbon" class="mb-8">
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">
+                        <i class="fas fa-leaf text-green-600 mr-2"></i>
+                        Carbon Impact Dashboard
+                    </h2>
+                    <button class="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg transition">
+                        <i class="fas fa-sync-alt mr-2"></i>
+                        Refresh
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Carbon Progress -->
+                    <div class="bg-gray-50 rounded-lg p-6">
+                        <h3 class="font-semibold text-gray-700 mb-4">Monthly Progress</h3>
+                        <div class="mb-4">
+                            <div class="flex justify-between text-sm text-gray-600 mb-2">
+                                <span>Carbon Saved This Month</span>
+                                <span id="carbonPercentage">0%</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-3">
+                                <div id="carbonProgressBar" class="bg-green-600 h-3 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <p id="impactMessage" class="text-gray-600 text-sm">Check in at an event to start tracking your carbon impact!</p>
+                    </div>
+
+                    <!-- Triple Pillar Info -->
+                    <div class="bg-gray-50 rounded-lg p-6">
+                        <h3 class="font-semibold text-gray-700 mb-4">Triple-Pillar Method</h3>
+                        <div class="space-y-3">
+                            <div class="flex items-center">
+                                <i class="fas fa-plane text-blue-500 mr-3"></i>
+                                <span class="text-sm">Air-Freight Baseline</span>
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-fire text-orange-500 mr-3"></i>
+                                <span class="text-sm">+ Gas Cooking</span>
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-ship text-green-500 mr-3"></i>
+                                <span class="text-sm">- Sea-Freight Actual</span>
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-bolt text-yellow-500 mr-3"></i>
+                                <span class="text-sm">- Induction Cooking</span>
+                            </div>
+                        </div>
+                        <div class="mt-4 p-3 bg-green-100 rounded-lg">
+                            <p class="text-sm text-green-800 font-semibold">= Your Carbon Savings!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Access Tools Section -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Digital Cookbook -->
+            <div class="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="text-xl font-bold text-gray-800">
+                            <i class="fas fa-book text-purple-600 mr-2"></i>
+                            Digital Cookbook
+                        </h3>
+                        <p class="text-gray-600 text-sm">50+ sustainable recipes</p>
+                    </div>
+                    <div class="bg-purple-100 rounded-lg p-3">
+                        <i class="fas fa-utensils text-purple-600 text-xl"></i>
+                    </div>
+                </div>
+                <p class="text-gray-600 mb-4">Access our complete heritage cookbook with carbon-conscious recipes and cooking techniques.</p>
+                <button id="cookbookButton" class="w-full bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-lg font-semibold transition">
+                    <i class="fas fa-book-open mr-2"></i>
+                    Open Digital Cookbook
+                </button>
+            </div>
+
+            <!-- Business Suite -->
+            <div class="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="text-xl font-bold text-gray-800">
+                            <i class="fas fa-briefcase text-blue-600 mr-2"></i>
+                            Business Suite
+                        </h3>
+                        <p class="text-gray-600 text-sm">Professional tools</p>
+                    </div>
+                    <div class="bg-blue-100 rounded-lg p-3">
+                        <i class="fas fa-tools text-blue-600 text-xl"></i>
+                    </div>
+                </div>
+                <p class="text-gray-600 mb-4">Digital SMS, allergen matrix, supplier ledger, and compliance tools for your business.</p>
+                <button id="businessButton" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-semibold transition">
+                    <i class="fas fa-chart-line mr-2"></i>
+                    Open Business Suite
+                </button>
+            </div>
+        </section>
+
+        <!-- Allergen Matrix Section -->
+        <section id="allergen" class="mb-8">
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">
+                        <i class="fas fa-shield-alt text-red-600 mr-2"></i>
+                        Allergen Matrix & QR Code
+                    </h2>
+                    <button id="generateQRButton" class="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg transition">
+                        <i class="fas fa-qrcode mr-2"></i>
+                        Generate QR Code
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div>
+                        <h3 class="font-semibold text-gray-700 mb-4">Public Allergen Matrix</h3>
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <p class="text-gray-600 text-sm mb-3">Generate a QR code for customers to scan and view your allergen information.</p>
+                            <div id="qrCodeContainer" class="flex justify-center mb-4">
+                                <img id="qrCodeImage" src="" alt="QR Code" class="hidden rounded-lg shadow-md">
+                                <div id="qrPlaceholder" class="bg-gray-200 rounded-lg p-8 text-center">
+                                    <i class="fas fa-qrcode text-4xl text-gray-400 mb-2"></i>
+                                    <p class="text-gray-500">QR Code will appear here</p>
+                                </div>
+                            </div>
+                            <div id="matrixUrlContainer" class="hidden">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Matrix URL:</label>
+                                <input type="text" id="allergenMatrixUrl" readonly class="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="font-semibold text-gray-700 mb-4">Quick Actions</h3>
+                        <div class="space-y-3">
+                            <button id="allergenSettingsButton" class="w-full bg-gray-600 hover:bg-gray-500 text-white py-3 rounded-lg font-semibold transition">
+                                <i class="fas fa-cog mr-2"></i>
+                                Manage Allergen Settings
+                            </button>
+                            <button class="w-full bg-green-600 hover:bg-green-500 text-white py-3 rounded-lg font-semibold transition">
+                                <i class="fas fa-download mr-2"></i>
+                                Download Allergen Report
+                            </button>
+                            <button class="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-semibold transition">
+                                <i class="fas fa-print mr-2"></i>
+                                Print Allergen Matrix
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Referral System Section -->
+        <section id="referral" class="mb-8">
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">
+                        <i class="fas fa-gift text-yellow-600 mr-2"></i>
+                        Referral System & Wallet
+                    </h2>
+                    <button class="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg transition">
+                        <i class="fas fa-history mr-2"></i>
+                        View History
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="bg-gray-50 rounded-lg p-6 text-center">
+                        <i class="fas fa-wallet text-green-600 text-3xl mb-3"></i>
+                        <h3 class="font-semibold text-gray-700 mb-2">Wallet Balance</h3>
+                        <p class="text-2xl font-bold text-green-600" id="walletBalance">£0.00</p>
+                        <p class="text-gray-600 text-sm">Available for purchases</p>
+                    </div>
+
+                    <div class="bg-gray-50 rounded-lg p-6 text-center">
+                        <i class="fas fa-users text-blue-600 text-3xl mb-3"></i>
+                        <h3 class="font-semibold text-gray-700 mb-2">Total Referrals</h3>
+                        <p class="text-2xl font-bold text-blue-600" id="totalReferrals">0</p>
+                        <p class="text-gray-600 text-sm">People referred</p>
+                    </div>
+
+                    <div class="bg-gray-50 rounded-lg p-6 text-center">
+                        <i class="fas fa-pound-sign text-purple-600 text-3xl mb-3"></i>
+                        <h3 class="font-semibold text-gray-700 mb-2">Total Earnings</h3>
+                        <p class="text-2xl font-bold text-purple-600" id="totalReferralEarnings">£0.00</p>
+                        <p class="text-gray-600 text-sm">From referrals</p>
+                    </div>
+                </div>
+
+                <div class="mt-6 p-4 bg-yellow-50 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h4 class="font-semibold text-gray-700">Your Referral Link</h4>
+                            <p class="text-sm text-gray-600">Share this link to earn £5-£20 per referral</p>
+                        </div>
+                        <button class="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg transition">
+                            <i class="fas fa-share-alt mr-2"></i>
+                            Share Link
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Notification Toasts -->
+    <div id="successMessage" class="fixed top-20 right-4 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg hidden transition-all transform translate-x-full">
+        <i class="fas fa-check-circle mr-2"></i>
+        <span id="successText">Success!</span>
+    </div>
+
+    <div id="errorMessage" class="fixed top-20 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg hidden transition-all transform translate-x-full">
+        <i class="fas fa-exclamation-circle mr-2"></i>
+        <span id="errorText">Error!</span>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg p-6 flex items-center">
+            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mr-3"></div>
+            <span>Loading...</span>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="dashboard.js"></script>
+</body>
+</html>
